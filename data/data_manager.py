@@ -2,15 +2,10 @@ from __future__ import annotations
 
 import logging
 
-import numpy as np
 import pandas as pd
 
 from config.settings import (
     DATA_CACHE_DIR,
-    END_DATE,
-    FACTOR_NAMES,
-    FREQUENCY,
-    PRIVATE_ASSETS,
     PUBLIC_ASSETS,
     START_DATE_TIER1,
     START_DATE_TIER2,
@@ -161,17 +156,6 @@ class DataManager:
         assets["us_large_cap"] = crsp_market["vwretd"].rename(
             "us_large_cap"
         )
-
-        # ETF proxies for remaining public assets
-        etf_asset_map = {
-            "us_small_cap":  "em_equity",   # IWM mapped as placeholder
-            "em_equity":     "em_equity",
-            "long_treasury": "long_treasury",
-            "tips":          "tips",
-            "ig_credit":     "ig_credit",
-            "reits":         "reits",
-            "commodities":   "commodities",
-        }
 
         for asset in PUBLIC_ASSETS:
             if asset == "us_large_cap":
@@ -353,7 +337,7 @@ class DataManager:
         if self.factor_returns_t1 is not None:
             t1 = self.factor_returns_t1
             a1 = self.asset_returns_t1
-            print(f"Tier 1 — Public Markets Only")
+            print("Tier 1 — Public Markets Only")
             print(
                 f"  Date range : {t1.index[0].date()} "
                 f"to {t1.index[-1].date()}"
@@ -365,7 +349,7 @@ class DataManager:
         if self.factor_returns_t2 is not None:
             t2 = self.factor_returns_t2
             a2 = self.asset_returns_t2
-            print(f"Tier 2 — Full Universe")
+            print("Tier 2 — Full Universe")
             print(
                 f"  Date range : {t2.index[0].date()} "
                 f"to {t2.index[-1].date()}"

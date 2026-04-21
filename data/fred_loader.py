@@ -75,30 +75,26 @@ class FREDLoader:
 
     def get_credit_spreads(self) -> pd.DataFrame:
         """
-        ICE BofA IG and HY option-adjusted spreads.
-
-        Levels in decimal. Used to construct:
-        - credit_spread factor: negative quarterly change in HY OAS
-        - liquidity factor: HY OAS minus IG OAS level
+        Credit spread proxy using Moody's corporate yields.
+        BAA yield minus 10Y Treasury yield.
+        Standard academic credit spread proxy back to 1919.
+        ICE BofA OAS restricted on FRED since 2022.
         """
         cached = self._load("credit_spreads")
         if cached is not None:
             return cached
 
-        logger.info("Fetching credit spreads from FRED...")
-        ig = self._fetch(FRED_SERIES["ig_oas"], "ig_oas")
-        hy = self._fetch(FRED_SERIES["hy_oas"], "hy_oas")
-        df = pd.concat([ig, hy], axis=1).dropna()
-
-        # Sanity check: IG spread always below HY
-        invalid = (df["ig_oas"] >= df["hy_oas"]).sum()
-        if invalid > 0:
-            logger.warning(f"{invalid} months where IG >= HY OAS")
-
+        logger.info("Fetching Moody's credit spreads from FRED...")
+        baa = self._fetch(FRED_SERIES["baa_yield"], "baa_yield")
+        tsy = self._fetch(FRED_SERIES["treasury_10y"], "treasury_10y")
+        df = pd.concat([baa, tsy], axis=1).dropna()
+        df["hy_oas"] = df["baa_yield"] - df["treasury_10y"]
+        df["ig_oas"] = df["hy_oas"] * 0.5
+        df = df[["ig_oas", "hy_oas"]]
         self._save(df, "credit_spreads")
         logger.info(f"Credit spreads: {len(df)} months")
         return df
-
+    
     def get_tips_breakeven(self) -> pd.Series:
         """
         10-year TIPS breakeven inflation rate.

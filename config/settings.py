@@ -61,8 +61,8 @@ FRED_SERIES: dict[str, str] = {
     "tbill_3m":       "TB3MS",
     "treasury_10y":   "GS10",
     "tips_breakeven": "T10YIE",
-    "ig_oas":         "BAMLC0A0CM",
-    "hy_oas":         "BAMLH0A0HYM2",
+    "baa_yield":      "BAA",        # Moody's BAA corporate yield
+    "aaa_yield":      "AAA",        # Moody's AAA corporate yield
     "cpi":            "CPIAUCSL",
     "nber_recession": "USREC",
 }

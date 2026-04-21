@@ -1,0 +1,25 @@
+# Secrets — never commit
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+
+# Data cache — regenerate from code
+data_cache/*.parquet
+data_cache/*.csv
+!data_cache/.gitkeep
+
+# Outputs — regenerate from code
+outputs/*.png
+outputs/*.pdf
+outputs/*.html
+!outputs/.gitkeep
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Environment
+.venv/

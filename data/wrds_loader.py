@@ -97,34 +97,46 @@ class WRDSLoader:
 
     def get_treasury_returns(self) -> pd.DataFrame:
         """
-        CRSP monthly treasury returns by maturity.
+        CRSP treasury returns from cs20yr and cs90d tables.
 
-        Used to construct term premium factor:
-            term_premium = treasury_20y_return - tbill_30d_return
+        cs20yr: 20-year Treasury total return (percent)
+        cs90d:  90-day T-bill yield (annualized percent)
 
-        Using return difference not yield difference — captures
-        realized compensation for duration risk each period.
+        Term premium = 20Y total return - monthly T-bill return
+        T-bill monthly return = annualized yield / 12 / 100
+
+        Both available from 1926. Full 45-year history covered.
         """
         cached = self._load("treasury")
         if cached is not None:
             return cached
 
         self._connect()
-        df = self._conn.raw_sql(f"""
-            SELECT caldt   AS date,
-                   t30ret  AS tbill_30d,
-                   t90ret  AS tbill_90d,
-                   t1yret  AS treasury_1y,
-                   t5yret  AS treasury_5y,
-                   t10yret AS treasury_10y,
-                   t20yret AS treasury_20y,
-                   t30yret AS treasury_30y
-            FROM crsp.mth_treasury
-            WHERE caldt >= '{START_DATE_TIER1}'
-              AND caldt <= '{END_DATE}'
-            ORDER BY caldt
+
+        # 20-year Treasury total return
+        df20 = self._conn.raw_sql(f"""
+            SELECT qtdate AS date, totret AS treasury_20y
+            FROM crsp.cs20yr
+            WHERE qtdate >= '{START_DATE_TIER1}'
+              AND qtdate <= '{END_DATE}'
+            ORDER BY qtdate
         """)
-        df = self._month_end(df, "date")
+        df20 = self._month_end(df20, "date")
+        df20["treasury_20y"] = df20["treasury_20y"] / 100.0
+
+        # 90-day T-bill yield converted to monthly return
+        df90 = self._conn.raw_sql(f"""
+            SELECT qtdate AS date, yldmat AS tbill_yield
+            FROM crsp.cs90d
+            WHERE qtdate >= '{START_DATE_TIER1}'
+              AND qtdate <= '{END_DATE}'
+            ORDER BY qtdate
+        """)
+        df90 = self._month_end(df90, "date")
+        df90["tbill_30d"] = df90["tbill_yield"] / 100.0 / 12.0
+        df90 = df90[["tbill_30d"]]
+
+        df = df20.join(df90, how="inner")
         self._save(df, "treasury")
         logger.info(f"CRSP treasury: {len(df)} months")
         return df

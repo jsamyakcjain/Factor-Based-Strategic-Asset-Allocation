@@ -17,12 +17,14 @@ logger = logging.getLogger(__name__)
 # ETF proxies for asset classes not cleanly available on WRDS
 # Adjusted close prices capture total return including dividends
 ETF_MAP: dict[str, str] = {
-    "em_equity":   "EEM",   # MSCI Emerging Markets — starts 2003
-    "tips":        "TIP",   # Bloomberg US TIPS — starts 2003
-    "ig_credit":   "LQD",   # Bloomberg Corp IG — starts 2002
-    "hy_credit":   "HYG",   # ICE BofA HY — starts 2007
-    "reits":       "VNQ",   # FTSE NAREIT — starts 2004
-    "commodities": "GSG",   # S&P GSCI — starts 2006
+    "us_small_cap": "IWM",  # Russell 2000 — starts 2000
+    "em_equity":    "EEM",  # MSCI EM — starts 2003
+    "tips":         "TIP",  # Bloomberg TIPS — starts 2003
+    "ig_credit":    "LQD",  # Bloomberg Corp IG — starts 2002
+    "hy_credit":    "HYG",  # ICE BofA HY — starts 2007
+    "reits":        "VNQ",  # FTSE NAREIT — starts 2004
+    "commodities":  "GSG",  # S&P GSCI — starts 2006
+    "long_treasury":"TLT",  # 20+ Year Treasury — starts 2002
 }
 
 # Longer history sources for Tier 1 analysis (1980+)

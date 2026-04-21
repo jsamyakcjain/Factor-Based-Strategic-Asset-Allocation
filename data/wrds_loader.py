@@ -164,7 +164,7 @@ class WRDSLoader:
             ORDER BY date
         """)
         df = self._month_end(df, "date")
-        df = df / 100.0
+        # FF factors already in decimal on WRDS — no conversion needed
         assert df["mktrf"].abs().max() < 0.5, "Check FF units"
         self._save(df, "ff")
         logger.info(f"FF factors: {len(df)} months")

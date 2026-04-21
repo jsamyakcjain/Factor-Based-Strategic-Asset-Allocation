@@ -133,7 +133,6 @@ class DataManager:
         self,
         crsp_market: pd.DataFrame,
         etf_returns: pd.DataFrame,
-        hy_total_return: pd.Series,
     ) -> pd.DataFrame:
         """
         Build 9-asset public market return matrix.
@@ -161,7 +160,8 @@ class DataManager:
             if asset == "us_large_cap":
                 continue  # already added above
             if asset == "hy_credit":
-                assets["hy_credit"] = hy_total_return
+                if "hy_credit" in etf_returns.columns:
+                    assets["hy_credit"] = etf_returns["hy_credit"]
             elif asset in etf_returns.columns:
                 assets[asset] = etf_returns[asset].rename(asset)
 
@@ -208,11 +208,6 @@ class DataManager:
         recession    = self._fred.get_recession_indicator()
         rf           = self._fred.get_risk_free_rate()
 
-        # HY total return from FRED for hy_credit asset
-        # Using ICE BofA HY Total Return index — longer history than HYG
-        hy_total = self._fred._fetch(
-            "BAMLHYH0A0HYM2EY", "hy_credit", to_decimal=False
-        ).pct_change()
 
         # ── 2. Build monthly factor series ────────────────────────
         factors_monthly = pd.concat([
@@ -225,7 +220,7 @@ class DataManager:
 
         # ── 3. Build monthly public asset returns ──────────────────
         public_monthly = self._build_public_assets(
-            crsp_market, etf_returns, hy_total
+            crsp_market, etf_returns
         )
 
         # ── 4. Convert to quarterly ────────────────────────────────
@@ -359,11 +354,11 @@ class DataManager:
             print()
 
         if self.factor_returns_t1 is not None:
-            print("Factor Returns (annualized %):")
+            print("Factor Returns (quarterly %):")
             stats = (
-                self.factor_returns_t1 * 4 * 100
+            self.factor_returns_t1 * 100
             ).describe().loc[["mean", "std"]].T
-            stats.columns = ["Ann.Mean%", "Ann.Vol%"]
-            print(stats.round(2).to_string())
+            stats.columns = ["Qtr.Mean%", "Qtr.Vol%"]
+            print(stats.round(3).to_string())
 
         print("=" * 60 + "\n")

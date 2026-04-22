@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import warnings
-warnings.filterwarnings("ignore", category=RuntimeWarning)
-
 import logging
 
 import numpy as np

@@ -60,6 +60,7 @@ class DataManager:
         # Shared
         self.recession: pd.Series | None = None
         self.rf:        pd.Series | None = None
+        self.credit_liquidity:  pd.Series | None = None
 
     # ── Factor construction ────────────────────────────────────────
 
@@ -127,6 +128,16 @@ class DataManager:
         Source: ff.liq_ps on WRDS.
         """
         return ps_liq.rename("liquidity")
+    
+    def _build_credit_liquidity(
+        self, credit: pd.DataFrame
+    ) -> pd.Series:
+        """
+        Credit market liquidity = negative change in BAA-GS10 spread.
+        More relevant for fixed income assets than PS innovation.
+        Wide spread = tight credit liquidity conditions.
+        """
+        return (-credit["hy_oas"].diff()).rename("credit_liquidity")
 
     # ── Asset construction ─────────────────────────────────────────
 
@@ -209,6 +220,12 @@ class DataManager:
         recession    = self._fred.get_recession_indicator()
         rf           = self._fred.get_risk_free_rate()
         ps_liq       = self._wrds.get_ps_liquidity()
+        self.credit_liquidity = self._to_quarterly_series(
+            (-credit["hy_oas"].diff()).rename("credit_liquidity")
+        )
+        # Credit liquidity for fixed income assets
+        # Negative change in BAA-GS10 spread
+        # Different from credit_spread factor which uses compounded change
 
 
         # ── 2. Build monthly factor series ────────────────────────
@@ -283,7 +300,7 @@ class DataManager:
         """
         self.factor_returns_t1 = pd.read_parquet(
             DATA_CACHE_DIR / "factor_returns_t1.parquet"
-        )
+        ) 
         self.asset_returns_t1 = pd.read_parquet(
             DATA_CACHE_DIR / "asset_returns_t1.parquet"
         )
@@ -299,6 +316,10 @@ class DataManager:
         self.rf = pd.read_parquet(
             DATA_CACHE_DIR / "rf.parquet"
         ).squeeze()
+        credit = self._fred.get_credit_spreads()
+        self.credit_liquidity = self._to_quarterly_series(
+            self._build_credit_liquidity(credit)
+        )
         logger.info("Loaded all matrices from cache.")
         self._print_summary()
         return self

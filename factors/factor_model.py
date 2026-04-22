@@ -11,7 +11,17 @@ from config.settings import ASSET_NAMES, FACTOR_NAMES
 
 logger = logging.getLogger(__name__)
 
+# Assets where equity liquidity (PS) is appropriate
+EQUITY_LIQUIDITY_ASSETS = [
+    "us_large_cap", "us_small_cap", "em_equity",
+    "reits", "commodities", "private_equity", "hedge_funds",
+]
 
+# Assets where credit liquidity (BAA spread change) is appropriate
+CREDIT_LIQUIDITY_ASSETS = [
+    "long_treasury", "tips", "ig_credit", "hy_credit",
+    "private_credit", "private_real_estate", "infrastructure",
+]
 @dataclass
 class BetaResult:
     """
@@ -43,6 +53,18 @@ class BetaResult:
         print(self.r_squared.round(3).to_string())
         print(f"{'='*65}\n")
 
+# Assets where equity liquidity (PS innovation) is appropriate
+EQUITY_LIQUIDITY_ASSETS = [
+    "us_large_cap", "us_small_cap", "em_equity",
+    "reits", "commodities", "private_equity", "hedge_funds",
+]
+
+# Assets where credit liquidity (BAA spread change) is appropriate
+CREDIT_LIQUIDITY_ASSETS = [
+    "long_treasury", "tips", "ig_credit", "hy_credit",
+    "private_credit", "private_real_estate", "infrastructure",
+]
+
 
 class OLSFactorModel:
     """
@@ -51,84 +73,152 @@ class OLSFactorModel:
 
     Estimates: r_it = α_i + β_i · F_t + ε_it
 
-    HAC standard errors correct for:
-    - Heteroskedasticity (time-varying volatility)
-    - Autocorrelation (private market smoothing residuals)
+    Three improvements over naive OLS:
 
-    Newey-West lag = 4 quarters (one year) — standard
-    for quarterly financial data.
+    1. Factor standardization
+       Factors are standardized to unit variance before
+       regression. Prevents inflation/credit betas from
+       being artificially large due to small factor variance.
+       Raw betas are re-scaled back to original units after.
 
-    This is the main result used in all downstream analysis:
-    - POET covariance matrix construction
-    - Enhanced HRP factor distance clustering
-    - Factor risk decomposition
+    2. Asset-class liquidity proxies
+       Equity assets use PS innovation (equity market liquidity).
+       Fixed income assets use -Δ(BAA-GS10) (credit market
+       liquidity). Reduces factor misspecification.
+
+    3. HAC standard errors
+       Newey-West 4-quarter lags. Robust to heteroskedasticity
+       and autocorrelation in residuals.
+
+    Outputs both standardized betas (for factor importance
+    comparison) and unstandardized betas (for return attribution
+    and HRP factor distance clustering).
     """
 
     def __init__(
         self,
-        factor_returns: pd.DataFrame,
-        asset_returns: pd.DataFrame,
-        hac_lags: int = 4,
+        factor_returns:   pd.DataFrame,
+        asset_returns:    pd.DataFrame,
+        hac_lags:         int = 4,
+        credit_liquidity: pd.Series | None = None,
     ) -> None:
-        self.factors = factor_returns
-        self.assets  = asset_returns
-        self.hac_lags = hac_lags
-        self.result: BetaResult | None = None
+        self.factors          = factor_returns
+        self.assets           = asset_returns
+        self.hac_lags         = hac_lags
+        self.credit_liquidity = credit_liquidity
+        self.result:          BetaResult | None = None
+        self.result_std:      BetaResult | None = None
 
     def fit(self) -> BetaResult:
         """
         Run OLS regression for each asset on five factors.
 
-        Returns BetaResult with 9x5 beta matrix.
-        """
+        Process:
+        1. Align data to common index
+        2. Standardize factors to unit variance
+        3. For each asset, select appropriate liquidity proxy
+        4. Run OLS with HAC standard errors
+        5. Re-scale betas to original factor units
+        6. Store both standardized and unstandardized results
 
-        # Align factor and asset returns to common index
+        Returns unstandardized BetaResult for downstream use.
+        """
+        # ── 1. Align ───────────────────────────────────────────────
         common = self.factors.index.intersection(
             self.assets.index
         )
-        # Convert to float64 — statsmodels cannot handle
-        # pandas nullable Float64 dtype from WRDS
         F = self.factors.loc[common].astype(float)
         R = self.assets.loc[common].astype(float)
 
+        # ── 2. Standardize factors ─────────────────────────────────
+        # Standardize to unit variance so betas are comparable
+        # across factors with very different magnitudes.
+        # inflation and credit_spread have ~0.003 quarterly std
+        # equity_premium has ~0.084 quarterly std
+        # Without standardization inflation betas are ~28x inflated
+        F_mean = F.mean()
+        F_std  = F.std()
+        F_std  = F_std.where(F_std > 1e-10, 1.0)
+        F_standardized = (F - F_mean) / F_std
 
-        # Add constant for intercept estimation
-        X = sm.add_constant(F)
+        # ── 3. Prepare credit liquidity if available ───────────────
+        if self.credit_liquidity is not None:
+            cl = self.credit_liquidity.reindex(common).astype(float)
+            cl_std = (cl - cl.mean()) / max(cl.std(), 1e-10)
+        else:
+            cl = None
+            cl_std = None
 
-        betas, t_stats, p_values, r2, alphas = {}, {}, {}, {}, {}
+        betas_raw, betas_std = {}, {}
+        t_stats, p_values, r2, alphas = {}, {}, {}, {}
 
         for asset in R.columns:
             y = R[asset].dropna()
-            X_asset = X.loc[y.index]
 
+            # ── 4. Select liquidity proxy for this asset ───────────
+            F_use = F_standardized.copy()
+
+            if (
+                asset in CREDIT_LIQUIDITY_ASSETS
+                and cl_std is not None
+            ):
+                # Replace PS liquidity with credit liquidity
+                F_use["liquidity"] = cl_std.reindex(F_use.index)
+                liquidity_source = "credit"
+            else:
+                liquidity_source = "ps"
+
+            X_asset = sm.add_constant(F_use.loc[y.index])
+
+            # ── 5. OLS with HAC ────────────────────────────────────
             model = sm.OLS(y, X_asset).fit(
                 cov_type="HAC",
                 cov_kwds={"maxlags": self.hac_lags},
             )
 
-            betas[asset]   = model.params[FACTOR_NAMES]
-            t_stats[asset] = model.tvalues[FACTOR_NAMES]
-            p_values[asset] = model.pvalues[FACTOR_NAMES]
-            r2[asset]      = model.rsquared_adj
-            alphas[asset]  = model.params["const"]
+            # Standardized betas — factor importance comparison
+            betas_std[asset]  = model.params[FACTOR_NAMES]
 
-            logger.info(
-                f"OLS {asset:<20} "
-                f"R²={model.rsquared_adj:.3f}  "
-                f"α={model.params['const']:.4f}"
+            # Unstandardized betas — re-scale to original units
+            # β_raw = β_std / σ_factor
+            betas_raw[asset]  = (
+                model.params[FACTOR_NAMES] / F_std
             )
 
+            t_stats[asset]    = model.tvalues[FACTOR_NAMES]
+            p_values[asset]   = model.pvalues[FACTOR_NAMES]
+            r2[asset]         = model.rsquared_adj
+            alphas[asset]     = model.params["const"]
+
+            logger.info(
+                f"OLS {asset:<22} "
+                f"R²={model.rsquared_adj:.3f}  "
+                f"α={model.params['const']:.4f}  "
+                f"liq={liquidity_source}"
+            )
+
+        # ── 6. Store both results ──────────────────────────────────
+        # Unstandardized — used for POET, HRP, risk decomposition
         self.result = BetaResult(
-            betas     = pd.DataFrame(betas).T,
+            betas     = pd.DataFrame(betas_raw).T,
             t_stats   = pd.DataFrame(t_stats).T,
             p_values  = pd.DataFrame(p_values).T,
             r_squared = pd.Series(r2),
             alphas    = pd.Series(alphas),
             method    = "OLS-HAC",
         )
+
+        # Standardized — used for factor importance tables in paper
+        self.result_std = BetaResult(
+            betas     = pd.DataFrame(betas_std).T,
+            t_stats   = pd.DataFrame(t_stats).T,
+            p_values  = pd.DataFrame(p_values).T,
+            r_squared = pd.Series(r2),
+            alphas    = pd.Series(alphas),
+            method    = "OLS-HAC-STANDARDIZED",
+        )
+
         return self.result
-
-
 class RollingFactorModel:
     """
     Rolling window OLS factor model.

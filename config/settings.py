@@ -152,6 +152,7 @@ ASSET_COLORS: dict[str, str] = {
     "private_credit":      "#374151",
     "private_real_estate": "#6B7280",
     "infrastructure":      "#9CA3AF",
+    "hedge_funds":         "#B45309",
 }
 
 METHOD_COLORS: dict[str, str] = {

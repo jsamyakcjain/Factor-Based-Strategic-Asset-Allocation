@@ -140,6 +140,30 @@ class WRDSLoader:
         self._save(df, "treasury")
         logger.info(f"CRSP treasury: {len(df)} months")
         return df
+    def get_ps_liquidity(self) -> pd.Series:
+        """
+    Pastor-Stambaugh (2003) liquidity innovation.
+    Source: ff.liq_ps on WRDS.
+    ps_innov = monthly unexpected change in market liquidity.
+    Positive = liquidity improved. Negative = dried up.
+    Covers 1962-2024. Stationary by construction.
+    """
+        cached = self._load("ps_liquidity")
+        if cached is not None:
+            return cached["liquidity"]
+
+        self._connect()
+        df = self._conn.raw_sql(f"""
+        SELECT date, ps_innov AS liquidity
+        FROM ff.liq_ps
+        WHERE date >= '{START_DATE_TIER1}'
+          AND date <= '{END_DATE}'
+        ORDER BY date
+    """)
+        df = self._month_end(df, "date")
+        self._save(df, "ps_liquidity")
+        logger.info(f"PS liquidity: {len(df)} months")
+        return df["liquidity"]
 
     def get_ff_factors(self) -> pd.DataFrame:
         """

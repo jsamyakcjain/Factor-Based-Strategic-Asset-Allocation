@@ -114,19 +114,19 @@ class DataManager:
             "CPI backfill pre-2003"
         )
         return infl
-
+    
     def _build_liquidity(
-        self, credit: pd.DataFrame
+        self,
+        ps_liq: pd.Series,
     ) -> pd.Series:
         """
-        Liquidity = HY OAS minus IG OAS level.
-        Spread-of-spreads captures systematic illiquidity premium.
-        Wide spread = tight liquidity = high illiquidity premium.
-        Used as level (not change) — slow-moving structural signal.
+        Liquidity factor = Pastor-Stambaugh (2003) innovation.
+        Monthly unexpected change in equity market liquidity.
+        Positive = liquidity improved unexpectedly.
+        Stationary by construction. Covers 1980-2024.
+        Source: ff.liq_ps on WRDS.
         """
-        return (
-            credit["hy_oas"].rename("liquidity")
-        ).rename("liquidity")
+        return ps_liq.rename("liquidity")
 
     # ── Asset construction ─────────────────────────────────────────
 
@@ -208,15 +208,17 @@ class DataManager:
         cpi          = self._fred.get_cpi()
         recession    = self._fred.get_recession_indicator()
         rf           = self._fred.get_risk_free_rate()
+        ps_liq       = self._wrds.get_ps_liquidity()
 
 
         # ── 2. Build monthly factor series ────────────────────────
+
         factors_monthly = pd.concat([
             self._build_equity_premium(ff),
             self._build_term_premium(treasury),
             self._build_credit_spread(credit),
             self._build_inflation(tips, cpi),
-            self._build_liquidity(credit),
+            self._build_liquidity(ps_liq),
         ], axis=1)
 
         # ── 3. Build monthly public asset returns ──────────────────
@@ -225,20 +227,8 @@ class DataManager:
         )
 
         # ── 4. Convert to quarterly ────────────────────────────────
- # Return-based factors: compound monthly returns
-        return_factors = ["equity_premium", "term_premium",
-                          "credit_spread", "inflation"]
-        factors_returns_q = self._to_quarterly(
-            factors_monthly[return_factors]
-        )
-
-        # Level-based factor: take quarter-end level
-        liquidity_q = factors_monthly[["liquidity"]].resample("QE").last()
-
-        factors_q = pd.concat(
-            [factors_returns_q, liquidity_q], axis=1
-        )[FACTOR_NAMES]
-
+        # Return-based factors: compound monthly returns
+        factors_q   = self._to_quarterly(factors_monthly[FACTOR_NAMES])
         public_q    = self._to_quarterly(public_monthly)
         recession_q = recession.resample("QE").last().astype(int)
         rf_q        = self._to_quarterly_series(rf)

@@ -37,6 +37,7 @@ LONG_HISTORY_NOTES: dict[str, str] = {
     "hy_credit":   "ICE BofA HY Total Return from FRED 1986+",
     "reits":       "FTSE NAREIT All Equity from nareit.com 1972+",
     "commodities": "S&P GSCI Total Return from Bloomberg 1970+",
+    "long_treasury": "Bloomberg 20+ Year Treasury index 1980+",
 }
 
 

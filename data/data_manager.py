@@ -9,6 +9,7 @@ from config.settings import (
     PUBLIC_ASSETS,
     START_DATE_TIER1,
     START_DATE_TIER2,
+    FACTOR_NAMES
 )
 from data.ca_loader import CALoader
 from data.fred_loader import FREDLoader
@@ -124,7 +125,7 @@ class DataManager:
         Used as level (not change) — slow-moving structural signal.
         """
         return (
-            credit["hy_oas"] - credit["ig_oas"]
+            credit["hy_oas"].rename("liquidity")
         ).rename("liquidity")
 
     # ── Asset construction ─────────────────────────────────────────
@@ -224,10 +225,23 @@ class DataManager:
         )
 
         # ── 4. Convert to quarterly ────────────────────────────────
-        factors_q  = self._to_quarterly(factors_monthly)
-        public_q   = self._to_quarterly(public_monthly)
+ # Return-based factors: compound monthly returns
+        return_factors = ["equity_premium", "term_premium",
+                          "credit_spread", "inflation"]
+        factors_returns_q = self._to_quarterly(
+            factors_monthly[return_factors]
+        )
+
+        # Level-based factor: take quarter-end level
+        liquidity_q = factors_monthly[["liquidity"]].resample("QE").last()
+
+        factors_q = pd.concat(
+            [factors_returns_q, liquidity_q], axis=1
+        )[FACTOR_NAMES]
+
+        public_q    = self._to_quarterly(public_monthly)
         recession_q = recession.resample("QE").last().astype(int)
-        rf_q       = self._to_quarterly_series(rf)
+        rf_q        = self._to_quarterly_series(rf)
 
         # ── 5. Tier 1 — public markets, 1980 to 2024 ──────────────
         t1_idx = factors_q.dropna().index.intersection(

@@ -41,6 +41,7 @@ PRIVATE_ASSETS: list[str] = [
     "private_credit",
     "private_real_estate",
     "infrastructure",
+    "hedge_funds",
 ]
 
 ASSET_NAMES: list[str] = PUBLIC_ASSETS + PRIVATE_ASSETS
@@ -68,6 +69,8 @@ FRED_SERIES: dict[str, str] = {
 }
 
 # ── Benchmarks ──────────────────────────────────────────────────────
+
+
 BENCHMARKS: dict[str, str] = {
     "us_large_cap":        "S&P 500 Total Return",
     "us_small_cap":        "Russell 2000 Total Return",
@@ -82,6 +85,7 @@ BENCHMARKS: dict[str, str] = {
     "private_credit":      "Cambridge Associates US Private Credit",
     "private_real_estate": "Cambridge Associates US Real Estate",
     "infrastructure":      "Cambridge Associates Global Infrastructure",
+    "hedge_funds": "Eureka Hedge Fund Index",
 }
 
 # ── CA Files ────────────────────────────────────────────────────────
@@ -90,9 +94,11 @@ CA_FILES: dict[str, str] = {
     "private_credit":       "ca_private_credit.csv",
     "private_real_estate":  "ca_private_real_estate.csv",
     "infrastructure":       "ca_infrastructure.csv",
+    "hedge_funds": "eureka_hedge_funds.csv",
 }
 
 # ── JPM 2026 LTCMA ──────────────────────────────────────────────────
+
 JPM_LTCMA: dict[str, float] = {
     "us_large_cap":        0.067,
     "us_small_cap":        0.069,
@@ -103,10 +109,11 @@ JPM_LTCMA: dict[str, float] = {
     "hy_credit":           0.061,
     "reits":               0.088,
     "commodities":         0.046,
-    "private_equity":      0.109,
-    "private_credit":      0.082,
-    "private_real_estate": 0.073,
-    "infrastructure":      0.068,
+    "private_equity":      0.102,
+    "private_credit":      0.077,
+    "private_real_estate": 0.0915,
+    "infrastructure":      0.072,
+    "hedge_funds":         0.0497,
 }
 
 # ── Portfolio Parameters ────────────────────────────────────────────

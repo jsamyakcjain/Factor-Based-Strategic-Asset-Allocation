@@ -145,36 +145,33 @@ class DataManager:
         self,
         crsp_market: pd.DataFrame,
         etf_returns: pd.DataFrame,
-    ) -> pd.DataFrame:
+        ) -> pd.DataFrame:
         """
-        Build 9-asset public market return matrix.
+    Build 9-asset public market return matrix.
 
-        Asset          Source
-        ─────────────────────────────────────────────
-        us_large_cap   CRSP vwretd
-        us_small_cap   yfinance IWM (placeholder for CRSP deciles)
-        em_equity      yfinance EEM
-        long_treasury  yfinance TLT
-        tips           yfinance TIP
-        ig_credit      yfinance LQD
-        hy_credit      ICE BofA HY Total Return (FRED)
-        reits          yfinance VNQ
-        commodities    yfinance GSG
-        """
+    Asset          Source
+    ─────────────────────────────────────────────
+    us_large_cap   CRSP vwretd
+    us_mid_cap     iShares IJH ETF
+    us_small_cap   iShares IWM ETF
+    em_equity      iShares EEM ETF
+    long_treasury  iShares TLT ETF
+    tips           iShares TIP ETF
+    ig_credit      iShares LQD ETF
+    reits          Vanguard VNQ ETF
+    commodities    ^SPGSCI spliced with GSG ETF
+    """
         assets = {}
 
-        # CRSP for us_large_cap — cleaner than SPY
+    # CRSP for us_large_cap — cleaner than SPY, goes to 1926
         assets["us_large_cap"] = crsp_market["vwretd"].rename(
-            "us_large_cap"
-        )
+        "us_large_cap"
+    )
 
         for asset in PUBLIC_ASSETS:
             if asset == "us_large_cap":
-                continue  # already added above
-            if asset == "hy_credit":
-                if "hy_credit" in etf_returns.columns:
-                    assets["hy_credit"] = etf_returns["hy_credit"]
-            elif asset in etf_returns.columns:
+                continue
+            if asset in etf_returns.columns:
                 assets[asset] = etf_returns[asset].rename(asset)
 
         return pd.DataFrame(assets)
@@ -251,13 +248,35 @@ class DataManager:
         rf_q        = self._to_quarterly_series(rf)
 
         # ── 5. Tier 1 — public markets, 1980 to 2024 ──────────────
-        t1_idx = factors_q.dropna().index.intersection(
-            public_q.dropna(how="all").index
-        )
-        t1_idx = t1_idx[t1_idx >= START_DATE_TIER1]
+        # ── 5. Tier 1 — 2004 anchor, complete cases for POET ──────
+        t1_start = pd.Timestamp(START_DATE_TIER1)
+        t1_end   = pd.Timestamp("2024-12-31")
 
+        # Full factor index — no NaN in factors
+        t1_idx = factors_q.dropna().index
+        t1_idx = t1_idx[
+            (t1_idx >= t1_start) & (t1_idx <= t1_end)
+        ]
+
+        # Asset returns — reindex to full factor grid
+        # NaNs preserved for pre-inception ETFs
         self.factor_returns_t1 = factors_q.loc[t1_idx].copy()
-        self.asset_returns_t1  = public_q.loc[t1_idx].copy()
+        self.asset_returns_t1  = public_q.reindex(t1_idx).copy()
+
+        # Complete cases only — for POET covariance estimation
+        # POET requires balanced panel — no NaN allowed
+        # Rolling betas use asset_returns_t1 (per-asset dropna)
+        complete_idx = self.asset_returns_t1.dropna(
+            how="any"
+        ).index
+        self.asset_returns_t1_complete = (
+            self.asset_returns_t1.loc[complete_idx].copy()
+        )
+
+        logger.info(
+            f"Tier 1: {len(t1_idx)} quarters total, "
+            f"{len(complete_idx)} complete cases for POET"
+        )
 
         # ── 6. Tier 2 — full universe, 2004 to 2024 ───────────────
         private_q = self._ca.get_private_market_returns()
@@ -313,6 +332,9 @@ class DataManager:
         self.recession = pd.read_parquet(
             DATA_CACHE_DIR / "recession.parquet"
         ).squeeze()
+        self.asset_returns_t1_complete = pd.read_parquet(
+            DATA_CACHE_DIR / "asset_returns_t1_complete.parquet"
+        )
         self.rf = pd.read_parquet(
             DATA_CACHE_DIR / "rf.parquet"
         ).squeeze()
@@ -332,6 +354,9 @@ class DataManager:
         )
         self.asset_returns_t1.to_parquet(
             DATA_CACHE_DIR / "asset_returns_t1.parquet"
+        )
+        self.asset_returns_t1_complete.to_parquet(
+            DATA_CACHE_DIR / "asset_returns_t1_complete.parquet"
         )
         self.factor_returns_t2.to_parquet(
             DATA_CACHE_DIR / "factor_returns_t2.parquet"

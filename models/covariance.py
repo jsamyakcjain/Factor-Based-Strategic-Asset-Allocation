@@ -206,13 +206,17 @@ class POETCovariance:
         Ensure matrix is positive definite by adding
         small diagonal perturbation if needed.
         """
-        min_eig = np.linalg.eigvalsh(matrix).min()
+        # Symmetrize first
+        matrix = (matrix + matrix.T) / 2
+        try:
+            min_eig = np.linalg.eigvalsh(matrix).min()
+        except np.linalg.LinAlgError:
+            # fallback: add small diagonal and retry
+            matrix = matrix + 1e-6 * np.eye(matrix.shape[0])
+            min_eig = np.linalg.eigvalsh(matrix).min()
         if min_eig < 1e-8:
             delta = abs(min_eig) + 1e-6
             matrix = matrix + delta * np.eye(matrix.shape[0])
-            logger.info(
-                f"Added {delta:.2e} to diagonal for PD"
-            )
         return matrix
 
     def _log_diagnostics(

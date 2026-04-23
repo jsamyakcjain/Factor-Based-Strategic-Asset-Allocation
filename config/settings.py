@@ -19,19 +19,19 @@ FRED_API_KEY:  str | None = os.getenv("FRED_API_KEY")
 WRDS_USERNAME: str | None = os.getenv("WRDS_USERNAME")
 
 # ── Sample Period ───────────────────────────────────────────────────
-START_DATE_TIER1: str = "1980-01-01"
+START_DATE_TIER1: str = "2004-01-01"
 START_DATE_TIER2: str = "2004-01-01"
 END_DATE:         str = "2024-12-31"
 
 # ── Asset Universe ──────────────────────────────────────────────────
 PUBLIC_ASSETS: list[str] = [
     "us_large_cap",
+    "us_mid_cap",
     "us_small_cap",
     "em_equity",
     "long_treasury",
     "tips",
     "ig_credit",
-    "hy_credit",
     "reits",
     "commodities",
 ]
@@ -101,12 +101,12 @@ CA_FILES: dict[str, str] = {
 
 JPM_LTCMA: dict[str, float] = {
     "us_large_cap":        0.067,
+    "us_mid_cap":          0.068,
     "us_small_cap":        0.069,
     "em_equity":           0.078,
     "long_treasury":       0.052,
     "tips":                0.043,
     "ig_credit":           0.052,
-    "hy_credit":           0.061,
     "reits":               0.088,
     "commodities":         0.046,
     "private_equity":      0.102,
@@ -140,12 +140,12 @@ FACTOR_COLORS: dict[str, str] = {
 
 ASSET_COLORS: dict[str, str] = {
     "us_large_cap":        "#1E3A8A",
+    "us_mid_cap":          "#60A5FA",
     "us_small_cap":        "#2563EB",
     "em_equity":           "#F97316",
     "long_treasury":       "#059669",
     "tips":                "#10B981",
     "ig_credit":           "#F59E0B",
-    "hy_credit":           "#EF4444",
     "reits":               "#8B5CF6",
     "commodities":         "#EC4899",
     "private_equity":      "#0F172A",

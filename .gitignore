@@ -10,7 +10,6 @@ __pycache__/
 .env
 
 # Output files
-analytics_report.xlsx
 *.png
 
 # OS

@@ -40,6 +40,3 @@ Python 3.11, wrds, pandas, numpy, scipy, cvxpy, matplotlib, openpyxl, yfinance, 
 
 ## Period
 2004 Q4 to 2024 Q4, 81 complete quarters, all 13 assets present
-
-## Academic Context
-NYU Tandon School of Engineering, MSFE, Spring 2026

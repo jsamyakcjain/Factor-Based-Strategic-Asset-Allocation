@@ -445,8 +445,8 @@ section_title(ws3, row_start, 1, "Equity Premium Beta: Full-Sample OLS vs Stress
 header_row(ws3, row_start+1, ["Asset Class","OLS Beta","Stress Beta (Q10)","Uplift","Interpretation"],
            [28,16,20,16,30])
 ols_erp = result.betas["equity_premium"]
-q10_result = qm.results.get(0.10, None)
-q10_erp  = q10_result.betas["equity_premium"].reindex(ols_erp.index) if q10_result is not None else ols_erp.copy()
+q10_result2 = qm.results.get(0.10, None)
+q10_erp  = q10_result2.betas["equity_premium"].reindex(ols_erp.index) if q10_result2 is not None else ols_erp.copy()
 stress_rows = []
 for asset in ols_erp.index:
     ols_b   = float(ols_erp.loc[asset])
@@ -790,157 +790,169 @@ from portfolio.hrp import FACTOR_NAMES
 
 ws8 = wb.create_sheet("Cluster Analysis")
 ws8.sheet_view.showGridLines = False
-ws8.column_dimensions["A"].width = 30
-for col in ["B","C","D","E","F","G","H"]:
-    ws8.column_dimensions[col].width = 16
 
-section_title(ws8, 1, 1,
-    "Enhanced HRP — Factor-Loading Cluster Analysis (Ward Linkage, Standardised Betas)", 8)
-
-ws8.merge_cells("A2:H3")
-c = ws8["A2"]
-c.value = (
-    "Assets are clustered by Euclidean distance on z-scored factor betas (5 factors). "
-    "Each factor is standardised to zero mean and unit variance before distance calculation "
-    "so that equity premium (range 0.1-1.2) does not dominate inflation (range 0.01-0.08) "
-    "purely due to scale. Ward linkage minimises within-cluster variance at each merge step."
-)
-c.fill = fill(BLUE); c.font = font(MUTED, 9)
-c.alignment = aln("left", wrap=True)
-ws8.row_dimensions[2].height = 30
-ws8.row_dimensions[3].height = 8
+col_widths = {"A":3,"B":28,"C":28,"D":28,"E":28,"F":28,"G":28,"H":28,"I":28,"J":28}
+for col, w in col_widths.items():
+    ws8.column_dimensions[col].width = w
 
 # Compute clusters
-B = result.betas.reindex(assets)[FACTOR_NAMES].values.astype(float)
-mu_b = B.mean(axis=0); sig_b = B.std(axis=0); sig_b[sig_b==0] = 1.0
-B_z  = (B - mu_b) / sig_b
+B_cl = result.betas.reindex(assets)[FACTOR_NAMES].values.astype(float)
+mu_b = B_cl.mean(axis=0); sig_b = B_cl.std(axis=0); sig_b[sig_b==0] = 1.0
+B_z  = (B_cl - mu_b) / sig_b
 link = linkage(B_z, method="ward")
+labels_5 = fcluster(link, t=5, criterion="maxclust")
 
 FACTOR_DISPLAY = ["Equity Premium","Term Premium","Credit Spread","Inflation","Liquidity"]
-CLUSTER_LABELS = {
-    1: ("Yield-Seeking Diversifiers", "Low equity beta, mixed factor exposures. Credit, rate and alternative assets that share only low systematic equity exposure."),
-    2: ("Pure Rate Duration",         "Uniquely high positive term premium beta with negative equity beta. Standalone rate hedge — no other asset shares this profile."),
-    3: ("Inflation Hedge",            "Dominant positive inflation beta driven by real commodity price dynamics. Orthogonal to equity and credit factors."),
-    4: ("Domestic Equity Beta",       "Tightly grouped high positive equity premium loading. Domestic equity in different size segments — essentially the same systematic risk."),
-    5: ("Credit-Sensitive Equity",    "High credit spread sensitivity and strongly negative liquidity beta. Both assets seize during credit market stress — EM via capital flight, REITs via property financing."),
+CLUSTER_META = {
+    1: ("Yield-Seeking Diversifiers", "B03A2E",
+        "Low equity beta complex. Credit and alternative assets sharing below-average equity exposure."),
+    2: ("Pure Rate Duration",         "2E6DA4",
+        "Positive term premium, negative equity beta. Sole rate hedge in universe."),
+    3: ("Inflation Hedge",            "B7770D",
+        "Dominant inflation beta. Real commodity dynamics orthogonal to equity and credit."),
+    4: ("Domestic Equity Beta",       "1E7B45",
+        "High positive equity loading across all three size segments. Essentially same systematic risk."),
+    5: ("Credit-Sensitive Equity",    "6B3FA0",
+        "High credit spread sensitivity, strongly negative liquidity beta. Seizes during credit stress."),
 }
 
-for k in [3, 4, 5]:
-    labels_k = fcluster(link, t=k, criterion="maxclust")
-    row_off  = 4 + (k-3) * 22
-
-    section_title(ws8, row_off, 1, f"{k}-Cluster Solution", 8)
-    header_row(ws8, row_off+1,
-        ["Cluster","Economic Label","Members","Dominant Factor","ERP","Term","Credit","Inflation","Liquidity"],
-        [6, 26, 50, 18, 12, 12, 12, 12, 12])
-    ws8.column_dimensions["A"].width = 6
-    ws8.column_dimensions["B"].width = 26
-    ws8.column_dimensions["C"].width = 50
-
-    for cid in range(1, k+1):
-        idx_list = [i for i in range(len(assets)) if labels_k[i]==cid]
-        members  = [dn(assets[i]) for i in idx_list]
-        if not members: continue
-        B_sub    = B_z[idx_list]
-        centroid = B_sub.mean(axis=0)
-        dom_idx  = int(np.argmax(np.abs(centroid)))
-        dom_factor = FACTOR_DISPLAY[dom_idx]
-        label    = CLUSTER_LABELS.get(cid, ("", ""))[0] if k==5 else ""
-        members_str = ",  ".join(members)
-        bg = bg_alt[cid % 2]
-        data_row(ws8, row_off+1+cid,
-            [cid, label, members_str, dom_factor] + [round(float(centroid[j]),2) for j in range(5)],
-            bg=bg)
-        ws8.cell(row_off+1+cid, 1).alignment = aln("center")
-        ws8.cell(row_off+1+cid, 2).alignment = aln("left")
-        ws8.cell(row_off+1+cid, 3).alignment = aln("left", wrap=True)
-        ws8.cell(row_off+1+cid, 4).alignment = aln("center")
-        ws8.row_dimensions[row_off+1+cid].height = 28
-
-ws8.row_dimensions[4+3*22].height = 8
-
-# Detailed 5-cluster analysis
-row_detail = 4 + 3*22 + 1
-section_title(ws8, row_detail, 1,
-    "5-Cluster Solution — Standardised Beta Profiles and Economic Interpretation", 8)
-
-labels_5 = fcluster(link, t=5, criterion="maxclust")
-header_row(ws8, row_detail+1,
-    ["Asset Class","Cluster","ERP (z)","Term (z)","Credit (z)","Inflation (z)","Liquidity (z)","R-Squared"],
-    [30, 6, 14, 14, 14, 14, 14, 14])
-
-for i, asset in enumerate(assets):
-    cid  = int(labels_5[i])
-    r2v  = float(result.r_squared.loc[asset]) if asset in result.r_squared.index else 0
-    bg   = bg_alt[cid % 2]
-    data_row(ws8, row_detail+2+i,
-        [dn(asset), cid] + [round(float(B_z[i,j]),3) for j in range(5)] + [r2v],
-        bg=bg,
-        fmt_map={8: "0.0%"})
-    ws8.cell(row_detail+2+i, 1).alignment = aln("left")
-    ws8.cell(row_detail+2+i, 1).font = font("F0F4F8", 10)
-    ws8.cell(row_detail+2+i, 2).alignment = aln("center")
-    r2_cell = ws8.cell(row_detail+2+i, 8)
-    if r2v >= 0.7: r2_cell.font = Font(name="Arial", color=GREEN, size=10, bold=True)
-    elif r2v >= 0.4: r2_cell.font = Font(name="Arial", color=AMBER, size=10)
-    else: r2_cell.font = Font(name="Arial", color=RED, size=10)
-
-ws8.row_dimensions[row_detail+2+len(assets)].height = 8
-
-# Cluster interpretation box
-row_interp = row_detail + 3 + len(assets)
-section_title(ws8, row_interp, 1, "5-Cluster Economic Interpretation", 8)
+CLUSTER_DEFS = {}
 for cid in range(1, 6):
-    label, desc = CLUSTER_LABELS.get(cid, ("",""))
     idx_list = [i for i in range(len(assets)) if labels_5[i]==cid]
-    members  = ",  ".join([dn(assets[i]) for i in idx_list])
-    B_sub    = B_z[idx_list]
-    centroid = B_sub.mean(axis=0)
+    members  = [dn(assets[i]) for i in idx_list]
+    centroid = B_z[idx_list].mean(axis=0) if idx_list else np.zeros(5)
     dom_idx  = int(np.argmax(np.abs(centroid)))
-    clr_map  = [RED, ACCENT, AMBER, GREEN, "8E44AD"]
-    color    = clr_map[cid-1]
+    CLUSTER_DEFS[cid] = {"members": members, "centroid": centroid,
+                          "dominant": FACTOR_DISPLAY[dom_idx], "n": len(members)}
 
-    r = row_interp + cid
-    ws8.cell(r, 1, f"Cluster {cid}  {label}").fill = fill(PANEL)
-    ws8.cell(r, 1).font = Font(name="Arial", color=color, size=10, bold=True)
-    ws8.cell(r, 1).alignment = aln("left")
-    ws8.cell(r, 1).border = border_thin()
-    ws8.merge_cells(start_row=r, start_column=2, end_row=r, end_column=5)
-    ws8.cell(r, 2, members).fill = fill(PANEL)
-    ws8.cell(r, 2).font = font("F0F4F8", 10)
-    ws8.cell(r, 2).alignment = aln("left")
-    ws8.cell(r, 2).border = border_thin()
-    ws8.merge_cells(start_row=r, start_column=6, end_row=r, end_column=8)
-    ws8.cell(r, 6, desc).fill = fill(PANEL)
-    ws8.cell(r, 6).font = font(MUTED, 9)
-    ws8.cell(r, 6).alignment = aln("left", wrap=True)
-    ws8.cell(r, 6).border = border_thin()
-    ws8.row_dimensions[r].height = 32
+# SECTION 1: Title
+ws8.merge_cells("B1:J1")
+c = ws8["B1"]
+c.value = "FACTOR-LOADING CLUSTER ANALYSIS — ENHANCED HRP"
+c.fill = fill(NAVY); c.font = font("F0F4F8", 14, True)
+c.alignment = aln("center")
+ws8.row_dimensions[1].height = 30
 
-# Cluster charts
-fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+ws8.merge_cells("B2:J2")
+c = ws8["B2"]
+c.value = ("Ward linkage on z-scored factor betas  |  5-Factor Model  |  13 Asset Classes  |  "
+           "Euclidean distance in standardised beta space  |  2004 Q4 to 2024 Q4")
+c.fill = fill(BLUE); c.font = font(MUTED, 10)
+c.alignment = aln("center")
+ws8.row_dimensions[2].height = 18
+ws8.row_dimensions[3].height = 10
 
-# Chart 1: Standardised beta heatmap by cluster
-labels_5 = fcluster(link, t=5, criterion="maxclust")
-sorted_idx = np.argsort(labels_5)
-B_sorted   = B_z[sorted_idx]
-names_sorted = [dn(assets[i]) for i in sorted_idx]
+# SECTION 2: 5-Cluster Cards
+ws8.merge_cells("B4:J4")
+c = ws8["B4"]
+c.value = "5-CLUSTER SOLUTION — ECONOMIC INTERPRETATION"
+c.fill = fill(BLUE); c.font = font("F0F4F8", 11, True)
+c.alignment = aln("left")
+ws8.row_dimensions[4].height = 22
+
+card_col_starts = [2, 4, 6, 8, 10]  # B=2, D=4, F=6, H=8, J=10
+from openpyxl.utils import get_column_letter
+
+for cid in range(1, 6):
+    meta  = CLUSTER_META[cid]
+    defn  = CLUSTER_DEFS[cid]
+    label, hex_clr, desc = meta
+    col1 = card_col_starts[cid-1]
+    col2 = col1 + 1 if cid < 5 else col1
+
+    def merge_or_single(r, c1, c2, val):
+        if c1 != c2:
+            ws8.merge_cells(start_row=r, start_column=c1, end_row=r, end_column=c2)
+        cell = ws8.cell(r, c1, val)
+        return cell
+
+    # Title bar
+    cell = merge_or_single(5, col1, col2, f"CLUSTER {cid}")
+    cell.fill = fill(hex_clr); cell.font = font("F0F4F8", 9, True)
+    cell.alignment = aln("center"); cell.border = border_thin()
+    ws8.row_dimensions[5].height = 16
+
+    # Label
+    cell = merge_or_single(6, col1, col2, label)
+    cell.fill = fill(NAVY); cell.font = Font(name="Arial", color=hex_clr, size=11, bold=True)
+    cell.alignment = aln("center", wrap=True); cell.border = border_thin()
+    ws8.row_dimensions[6].height = 20
+
+    # Dominant factor
+    cell = merge_or_single(7, col1, col2, f"Dominant: {defn['dominant']}")
+    cell.fill = fill(PANEL); cell.font = font(MUTED, 9)
+    cell.alignment = aln("center"); cell.border = border_thin()
+    ws8.row_dimensions[7].height = 16
+
+    # Members
+    members_str = "\n".join(defn["members"])
+    cell = merge_or_single(8, col1, col2, members_str)
+    cell.fill = fill("111927"); cell.font = font("F0F4F8", 9)
+    cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    cell.border = border_thin()
+    ws8.row_dimensions[8].height = max(16 * defn["n"], 48)
+
+    # Description
+    cell = merge_or_single(9, col1, col2, desc)
+    cell.fill = fill(BLUE); cell.font = font(MUTED, 8)
+    cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    cell.border = border_thin()
+    ws8.row_dimensions[9].height = 36
+
+    # Centroid values
+    factor_labels = ["ERP","TERM","CREDIT","INFL","LIQ"]
+    for fi in range(5):
+        r = 10 + fi
+        val  = float(defn["centroid"][fi])
+        cell = merge_or_single(r, col1, col2, f"{factor_labels[fi]}:  {val:+.2f}")
+        bg_c = "1E3A1A" if val > 0.5 else "3A1A1A" if val < -0.5 else PANEL
+        cell.fill = fill(bg_c)
+        cell.font = Font(name="Arial",
+                         color="6BCB77" if val > 0.5 else "FF6B6B" if val < -0.5 else "D0D8E4",
+                         size=9, bold=abs(val)>0.5)
+        cell.alignment = aln("center"); cell.border = border_thin()
+        ws8.row_dimensions[r].height = 14
+
+ws8.row_dimensions[15].height = 12
+
+# CHARTS
+# Chart 1: Dendrogram
+fig1, ax1 = plt.subplots(figsize=(13, 4.5))
+dend = dendrogram(link, labels=[dn(a) for a in assets], orientation="top",
+                  leaf_rotation=40, leaf_font_size=9,
+                  color_threshold=link[-4, 2], ax=ax1)
+ax1.set_title("Ward Linkage Dendrogram — Factor Loading Distance\nAssets that merge first are most similar in factor space",
+              fontsize=11, fontweight="bold", color="#F0F4F8", pad=10)
+ax1.set_ylabel("Ward Distance (lower = more similar)", fontsize=9)
+ax1.grid(axis="y", alpha=0.3, linestyle="--")
+ax1.tick_params(axis="x", colors="#D0D8E4")
+ax1.tick_params(axis="y", colors="#D0D8E4")
+plt.tight_layout()
+img_dend = img_to_xl(fig1)
+img_dend.width = 910; img_dend.height = 340
+ws8.add_image(img_dend, "B16")
+
+# Chart 2: Beta heatmap
+sorted_idx     = np.argsort(labels_5)
+B_sorted       = B_z[sorted_idx]
+names_sorted   = [dn(assets[i]) for i in sorted_idx]
 cluster_sorted = labels_5[sorted_idx]
 
-im = axes[0].imshow(B_sorted, cmap="RdBu_r", vmin=-2.5, vmax=2.5, aspect="auto")
-axes[0].set_xticks(range(5))
-axes[0].set_xticklabels(["ERP","Term","Credit","Inflation","Liquidity"], fontsize=9)
-axes[0].set_yticks(range(len(assets)))
-axes[0].set_yticklabels(names_sorted, fontsize=8)
+fig2, ax2 = plt.subplots(figsize=(7, 6))
+im = ax2.imshow(B_sorted, cmap="RdBu_r", vmin=-2.5, vmax=2.5, aspect="auto")
+ax2.set_xticks(range(5))
+ax2.set_xticklabels(["Equity\nPremium","Term\nPremium","Credit\nSpread","Inflation","Liquidity"],
+                     fontsize=9, color="#D0D8E4")
+ax2.set_yticks(range(len(assets)))
+ax2.set_yticklabels(names_sorted, fontsize=8, color="#D0D8E4")
 for i in range(len(assets)):
     for j in range(5):
-        axes[0].text(j, i, f"{B_sorted[i,j]:.2f}", ha="center", va="center",
-                    fontsize=7, color="white" if abs(B_sorted[i,j])>1.2 else "#D0D8E4")
-plt.colorbar(im, ax=axes[0], fraction=0.04, label="Standardised Beta")
-axes[0].set_title("Standardised Factor Betas — Assets Sorted by Cluster",
-                  fontsize=10, fontweight="bold", color="#F0F4F8")
-
-# Add cluster separators
+        ax2.text(j, i, f"{B_sorted[i,j]:.2f}", ha="center", va="center",
+                 fontsize=7.5, color="white" if abs(B_sorted[i,j])>1.2 else "#A0B0C0",
+                 fontweight="bold" if abs(B_sorted[i,j])>1.5 else "normal")
+cbar = plt.colorbar(im, ax=ax2, fraction=0.04, pad=0.02)
+cbar.set_label("z-score", color="#D0D8E4", fontsize=9)
+plt.setp(cbar.ax.yaxis.get_ticklabels(), color="#D0D8E4")
 boundaries = []
 prev = cluster_sorted[0]
 for i, c in enumerate(cluster_sorted):
@@ -948,54 +960,111 @@ for i, c in enumerate(cluster_sorted):
         boundaries.append(i - 0.5)
         prev = c
 for b in boundaries:
-    axes[0].axhline(y=b, color="white", linewidth=1.5, alpha=0.8)
+    ax2.axhline(y=b, color="white", linewidth=2, alpha=0.9)
+ax2.set_title("Standardised Factor Beta Heatmap\nAssets Grouped by Cluster",
+              fontsize=10, fontweight="bold", color="#F0F4F8", pad=8)
+plt.tight_layout()
+img_heat = img_to_xl(fig2)
+img_heat.width = 490; img_heat.height = 460
+ws8.add_image(img_heat, "B42")
 
-# Chart 2: Cluster centroid radar / bar
-clr_list = [RED, ACCENT, AMBER, GREEN, "8E44AD"]
-
+# Chart 3: Cluster centroid profiles
+fig3, ax3 = plt.subplots(figsize=(8, 5))
+clr_list5 = ["#B03A2E","#2E6DA4","#B7770D","#1E7B45","#6B3FA0"]
 x = np.arange(5)
 bar_w = 0.15
 for cid in range(1, 6):
-    idx_list = [i for i in range(len(assets)) if labels_5[i]==cid]
-    centroid = B_z[idx_list].mean(axis=0)
-    offset = (cid - 3) * bar_w
-    axes[1].bar(x + offset, centroid, bar_w,
-                label=f"C{cid}", color="#"+clr_list[cid-1],
-                alpha=0.85)
-axes[1].axhline(y=0, color="#7A90A8", linewidth=0.8)
-axes[1].set_xticks(x)
-axes[1].set_xticklabels(["Equity\nPremium","Term\nPremium","Credit\nSpread","Inflation","Liquidity"], fontsize=9)
-axes[1].set_ylabel("Standardised Beta (z-score)")
-axes[1].set_title("Cluster Centroids — Factor Exposure Profile",
-                  fontsize=10, fontweight="bold", color="#F0F4F8")
-axes[1].legend(fontsize=8, framealpha=0.3)
-axes[1].grid(axis="y", alpha=0.4)
-
+    centroid = CLUSTER_DEFS[cid]["centroid"]
+    offset   = (cid - 3) * bar_w
+    ax3.bar(x + offset, centroid, bar_w,
+            label=f"C{cid}: {CLUSTER_META[cid][0][:18]}",
+            color=clr_list5[cid-1], alpha=0.9)
+ax3.axhline(y=0, color="#7A90A8", linewidth=1, linestyle="-")
+ax3.set_xticks(x)
+ax3.set_xticklabels(["Equity\nPremium","Term\nPremium","Credit\nSpread","Inflation","Liquidity"],
+                     fontsize=10, color="#D0D8E4")
+ax3.set_ylabel("Mean Standardised Beta (z-score)", fontsize=9, color="#D0D8E4")
+ax3.set_title("Cluster Factor Centroid Profiles\nWhat Each Cluster Is Exposed To",
+              fontsize=11, fontweight="bold", color="#F0F4F8", pad=10)
+ax3.legend(fontsize=8, framealpha=0.3, loc="upper right")
+ax3.grid(axis="y", alpha=0.35, linestyle="--")
+ax3.tick_params(colors="#D0D8E4")
 plt.tight_layout()
-img = img_to_xl(fig)
-img.width = 980; img.height = 400
-row_chart_cl = row_interp + 8
-ws8.add_image(img, f"A{row_chart_cl}")
+img_cent = img_to_xl(fig3)
+img_cent.width = 560; img_cent.height = 390
+ws8.add_image(img_cent, "G42")
 
-# Dendrogram chart
-fig2, ax = plt.subplots(figsize=(10, 4))
-dend = dendrogram(
-    link,
-    labels=[dn(a) for a in assets],
-    orientation="top",
-    leaf_rotation=45,
-    leaf_font_size=9,
-    color_threshold=link[-4, 2],
-    ax=ax,
-)
-ax.set_title("Ward Linkage Dendrogram — Factor Loading Distance",
-             fontsize=11, fontweight="bold", color="#F0F4F8")
-ax.set_ylabel("Ward Distance")
-ax.grid(axis="y", alpha=0.3)
-plt.tight_layout()
-img2 = img_to_xl(fig2)
-img2.width = 700; img2.height = 320
-ws8.add_image(img2, f"A{row_chart_cl + 32}")
+# SECTION 3: Full asset detail table
+row_tbl = 70
+ws8.merge_cells(f"B{row_tbl}:J{row_tbl}")
+c = ws8[f"B{row_tbl}"]
+c.value = "FULL ASSET DETAIL — CLUSTER ASSIGNMENT AND STANDARDISED BETAS"
+c.fill = fill(BLUE); c.font = font("F0F4F8", 11, True)
+c.alignment = aln("left"); c.border = border_thin()
+ws8.row_dimensions[row_tbl].height = 20
+
+header_row(ws8, row_tbl+1,
+    ["Asset Class","Cl.","Cluster Name","ERP (z)","Term (z)","Credit (z)","Inflation (z)","Liquidity (z)","R-Sq"],
+    [28, 5, 26, 12, 12, 12, 14, 14, 10])
+
+sort_order = sorted(range(len(assets)), key=lambda i: (labels_5[i], -B_z[i,0]))
+for row_i, i in enumerate(sort_order):
+    asset = assets[i]
+    cid   = int(labels_5[i])
+    r2v   = float(result.r_squared.loc[asset]) if asset in result.r_squared.index else 0
+    meta  = CLUSTER_META[cid]
+    hex_c = meta[1]
+    bg    = "1A2436" if row_i % 2 == 0 else PANEL
+    row_r = row_tbl + 2 + row_i
+
+    # Asset with colored left border
+    s = Side(style="medium", color=hex_c)
+    cell = ws8.cell(row_r, 2, dn(asset))
+    cell.fill = fill(bg); cell.font = font("F0F4F8", 10); cell.alignment = aln("left")
+    cell.border = Border(left=s, right=Side(style="thin", color="1E2D3D"),
+                         top=Side(style="thin", color="1E2D3D"),
+                         bottom=Side(style="thin", color="1E2D3D"))
+
+    # Cluster number
+    cell2 = ws8.cell(row_r, 3, cid)
+    cell2.fill = fill(PANEL); cell2.font = Font(name="Arial", color=hex_c, size=10, bold=True)
+    cell2.alignment = aln("center"); cell2.border = border_thin()
+
+    # Cluster name
+    cell3 = ws8.cell(row_r, 4, meta[0])
+    cell3.fill = fill(bg); cell3.font = Font(name="Arial", color=hex_c, size=9)
+    cell3.alignment = aln("left"); cell3.border = border_thin()
+
+    # Beta values with color coding
+    for j in range(5):
+        val  = float(B_z[i, j])
+        cell = ws8.cell(row_r, 5+j, round(val, 3))
+        bg_v = "1E3A1A" if val > 0.8 else "3A1A1A" if val < -0.8 else bg
+        cell.fill = fill(bg_v)
+        cell.font = Font(name="Arial",
+                         color="6BCB77" if val > 0.8 else "FF6B6B" if val < -0.8 else "D0D8E4",
+                         size=10, bold=abs(val)>1.2)
+        cell.alignment = aln("center"); cell.border = border_thin()
+        cell.number_format = "+0.000;-0.000;0.000"
+
+    # R-squared
+    r2_cell = ws8.cell(row_r, 10, r2v)
+    r2_cell.fill = fill(bg)
+    r2_color = GREEN if r2v >= 0.7 else AMBER if r2v >= 0.4 else RED
+    r2_cell.font = Font(name="Arial", color=r2_color, size=10, bold=r2v>=0.7)
+    r2_cell.alignment = aln("center"); r2_cell.border = border_thin()
+    r2_cell.number_format = "0.0%"
+    ws8.row_dimensions[row_r].height = 16
+
+# Legend
+row_note = row_tbl + 2 + len(assets) + 1
+ws8.merge_cells(f"B{row_note}:J{row_note}")
+c = ws8[f"B{row_note}"]
+c.value = ("Green = positive factor tilt  |  Red = negative factor tilt  |  "
+           "Bold = strong tilt (|z| > 1.2)  |  R-sq: green >= 0.70, amber >= 0.40, red < 0.40")
+c.fill = fill(NAVY); c.font = font(MUTED, 8)
+c.alignment = aln("center")
+ws8.row_dimensions[row_note].height = 14
 
 # ── Save ───────────────────────────────────────────────────────────
 output_path = "analytics_report.xlsx"

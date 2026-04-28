@@ -1,0 +1,66 @@
+Portfolio,Asset,Weight,Marginal_Risk_Contrib,Total_Risk_Contrib,Pct_of_Portfolio_Risk
+equal_weight,US Large Cap Equity,0.0769,0.076048,0.00585,11.296
+equal_weight,US Mid Cap Equity,0.0769,0.086711,0.00667,12.88
+equal_weight,US Small Cap Equity,0.0769,0.091605,0.007047,13.607
+equal_weight,Emerging Market Equity,0.0769,0.089756,0.006904,13.333
+equal_weight,Long Duration Treasury,0.0769,-0.018907,-0.001454,-2.809
+equal_weight,TIPS,0.0769,0.009951,0.000765,1.478
+equal_weight,Investment Grade Credit,0.0769,0.015928,0.001225,2.366
+equal_weight,REITs,0.0769,0.088049,0.006773,13.079
+equal_weight,Commodities,0.0769,0.075133,0.005779,11.16
+equal_weight,High Yield Credit,0.0769,0.039924,0.003071,5.93
+equal_weight,Hedge Funds,0.0769,0.027365,0.002105,4.065
+equal_weight,Private Equity,0.0769,0.052356,0.004027,7.777
+equal_weight,Private Real Estate,0.0769,0.039293,0.003023,5.837
+60_40,US Large Cap Equity,0.12,0.074895,0.008987,15.929
+60_40,US Mid Cap Equity,0.12,0.083975,0.010077,17.86
+60_40,US Small Cap Equity,0.12,0.091115,0.010934,19.378
+60_40,Emerging Market Equity,0.12,0.087451,0.010494,18.599
+60_40,Long Duration Treasury,0.1333,-0.002026,-0.00027,-0.479
+60_40,TIPS,0.1333,0.011282,0.001504,2.666
+60_40,Investment Grade Credit,0.1333,0.023661,0.003155,5.591
+60_40,REITs,0.12,0.096183,0.011542,20.456
+60_40,Commodities,0.0,0.043631,0.0,0.0
+60_40,High Yield Credit,0.0,0.037368,0.0,0.0
+60_40,Hedge Funds,0.0,0.025931,0.0,0.0
+60_40,Private Equity,0.0,0.039611,0.0,0.0
+60_40,Private Real Estate,0.0,0.016785,0.0,0.0
+mvo,US Large Cap Equity,0.0,0.056048,0.0,0.0
+mvo,US Mid Cap Equity,0.0,0.059944,0.0,0.0
+mvo,US Small Cap Equity,0.0,0.063759,0.0,0.0
+mvo,Emerging Market Equity,0.0711,0.067171,0.004778,10.842
+mvo,Long Duration Treasury,0.2963,0.020278,0.006009,13.634
+mvo,TIPS,0.0,0.015157,0.0,0.0
+mvo,Investment Grade Credit,0.0,0.026397,0.0,0.0
+mvo,REITs,0.1365,0.084981,0.011597,26.312
+mvo,Commodities,0.0,0.020529,0.0,0.0
+mvo,High Yield Credit,0.1961,0.036608,0.007178,16.286
+mvo,Hedge Funds,0.0,0.020138,0.0,0.0
+mvo,Private Equity,0.2823,0.049469,0.013963,31.681
+mvo,Private Real Estate,0.0177,0.030945,0.000549,1.245
+risk_parity,US Large Cap Equity,0.0424,0.062877,0.002666,7.692
+risk_parity,US Mid Cap Equity,0.0384,0.069455,0.002666,7.692
+risk_parity,US Small Cap Equity,0.0371,0.071946,0.002666,7.692
+risk_parity,Emerging Market Equity,0.0353,0.075587,0.002666,7.692
+risk_parity,Long Duration Treasury,0.1901,0.014023,0.002666,7.692
+risk_parity,TIPS,0.1561,0.017077,0.002666,7.692
+risk_parity,Investment Grade Credit,0.0989,0.02695,0.002666,7.693
+risk_parity,REITs,0.0331,0.080522,0.002666,7.692
+risk_parity,Commodities,0.0545,0.04887,0.002666,7.692
+risk_parity,High Yield Credit,0.0713,0.037383,0.002666,7.693
+risk_parity,Hedge Funds,0.1147,0.023239,0.002666,7.692
+risk_parity,Private Equity,0.0608,0.043854,0.002666,7.692
+risk_parity,Private Real Estate,0.0673,0.039609,0.002666,7.692
+enhanced_hrp,US Large Cap Equity,0.0142,0.062146,0.000882,3.109
+enhanced_hrp,US Mid Cap Equity,0.0107,0.06881,0.000738,2.601
+enhanced_hrp,US Small Cap Equity,0.0179,0.06998,0.00125,4.406
+enhanced_hrp,Emerging Market Equity,0.0102,0.077137,0.000785,2.769
+enhanced_hrp,Long Duration Treasury,0.0597,0.011857,0.000707,2.494
+enhanced_hrp,TIPS,0.3316,0.018549,0.006152,21.689
+enhanced_hrp,Investment Grade Credit,0.1092,0.028382,0.0031,10.928
+enhanced_hrp,REITs,0.0093,0.074168,0.000691,2.437
+enhanced_hrp,Commodities,0.0181,0.04544,0.000821,2.893
+enhanced_hrp,High Yield Credit,0.1484,0.041677,0.006185,21.804
+enhanced_hrp,Hedge Funds,0.228,0.024121,0.0055,19.389
+enhanced_hrp,Private Equity,0.0282,0.041555,0.001173,4.134
+enhanced_hrp,Private Real Estate,0.0146,0.026242,0.000382,1.347

@@ -55,30 +55,21 @@ class EnhancedHRP:
 
     def _factor_distance_matrix(self) -> pd.DataFrame:
         """
-        Build distance matrix from factor loading profiles.
-
-        d(i,j) = Euclidean distance between beta vectors
-                 of asset i and asset j.
-
-        Assets with similar factor exposures → small distance
-        → cluster together in HRP.
-
-        Crucially different from price correlation:
-        Two assets can have low price correlation but similar
-        factor loadings. Factor distance captures economic
-        similarity, not just price co-movement.
+        Build distance matrix from standardised factor loading profiles.
+        Z-score per factor before Euclidean distance so each factor
+        contributes equally regardless of numerical scale.
+        Without standardisation, equity premium (range 0.1-1.2) would
+        dominate inflation (range 0.01-0.08) purely due to scale.
         """
+        from scipy.spatial.distance import pdist, squareform
         assets = list(self.sigma.index)
-        B = self.betas.reindex(assets)[FACTOR_NAMES].values
-        n = len(assets)
-
-        dist = np.zeros((n, n))
-        for i in range(n):
-            for j in range(n):
-                dist[i, j] = np.sqrt(
-                    np.sum((B[i] - B[j]) ** 2)
-                )
-
+        B = self.betas.reindex(assets)[FACTOR_NAMES].values.astype(float)
+        mu  = B.mean(axis=0)
+        sig = B.std(axis=0)
+        sig[sig == 0] = 1.0
+        B_z = (B - mu) / sig
+        dist_mtx = squareform(pdist(B_z, metric="euclidean"))
+        return pd.DataFrame(dist_mtx, index=assets, columns=assets)
         return pd.DataFrame(dist, index=assets, columns=assets)
 
     # ── Clustering ────────────────────────────────────────────────

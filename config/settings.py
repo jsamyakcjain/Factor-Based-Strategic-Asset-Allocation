@@ -34,6 +34,17 @@ PUBLIC_ASSETS: list[str] = [
     "ig_credit",
     "reits",
     "commodities",
+    "hy_credit",
+    "private_equity_unsmthd",
+    "real_estate_unsmthd",
+    "hedge_funds",
+]
+
+PROFESSOR_ASSETS: list[str] = [
+    "hy_credit",
+    "private_equity_unsmthd",
+    "real_estate_unsmthd",
+    "hedge_funds",
 ]
 
 PRIVATE_ASSETS: list[str] = [
@@ -42,6 +53,8 @@ PRIVATE_ASSETS: list[str] = [
     "private_real_estate",
     "infrastructure",
     "hedge_funds",
+    "private_equity_unsmthd",
+    "real_estate_unsmthd",
 ]
 
 ASSET_NAMES: list[str] = PUBLIC_ASSETS + PRIVATE_ASSETS
@@ -114,6 +127,9 @@ JPM_LTCMA: dict[str, float] = {
     "private_real_estate": 0.0915,
     "infrastructure":      0.072,
     "hedge_funds":         0.0497,
+    "hy_credit":            0.061,
+    "private_equity_unsmthd": 0.102,
+    "real_estate_unsmthd":  0.0915,
 }
 
 # ── Portfolio Parameters ────────────────────────────────────────────
@@ -153,6 +169,9 @@ ASSET_COLORS: dict[str, str] = {
     "private_real_estate": "#6B7280",
     "infrastructure":      "#9CA3AF",
     "hedge_funds":         "#B45309",
+    "hy_credit":            "#EF4444",
+    "private_equity_unsmthd": "#0F172A",
+    "real_estate_unsmthd":  "#6B7280",
 }
 
 METHOD_COLORS: dict[str, str] = {

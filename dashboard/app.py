@@ -1,6 +1,7 @@
 from __future__ import annotations
 import sys
 import os
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import warnings
 warnings.filterwarnings("ignore")
@@ -36,7 +37,7 @@ def load_all():
     result = ols.fit()
     poet = POETCovariance(
         dm.factor_returns_t1,
-        dm.asset_returns_t1,
+        dm.asset_returns_t1_complete,
         result.betas,
     )
     poet.fit()
@@ -54,7 +55,7 @@ def load_all():
     hrp_w = EnhancedHRP(cov, result.betas).fit()
     rd = FactorRiskDecomposition(result.betas, factor_cov, cov)
     assets     = list(cov.index)
-    eq_assets  = [a for a in assets if a in ["us_large_cap","us_small_cap","em_equity","reits"]]
+    eq_assets  = [a for a in assets if a in ["us_large_cap","us_mid_cap","us_small_cap","em_equity","reits"]]
     bnd_assets = [a for a in assets if a in ["long_treasury","tips","ig_credit"]]
     portfolios = {
         "Equal Weight": rd.equal_weight(assets),
@@ -77,22 +78,22 @@ cov        = data["cov"]
 portfolios = data["portfolios"]
 decomp     = data["decomp"]
 
-st.title("📊 Hidden Factor Concentration in Multi-Asset Portfolios")
-st.markdown("**Factor-Based SAA** | POET Covariance · JPM 2026 LTCMA · Enhanced HRP")
+st.title("Hidden Factor Concentration in Multi-Asset Portfolios")
+st.markdown("**Factor-Based Strategic Asset Allocation**")
 st.divider()
 
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-    "📈 Portfolio Overview",
-    "🎯 Factor Attribution",
-    "🔍 Asset Deep Dive",
-    "⚖️ Construction Comparison",
-    "📋 Factor Model",
-    "🔔 Cluster Stability Monitor",
+    "Portfolio Overview",
+    "Factor Attribution",
+    "Asset Deep Dive",
+    "Construction Comparison",
+    "Factor Model",
+    "Cluster Stability Monitor",
 ])
 
 # ── TAB 1 ──────────────────────────────────────────────────────────
 with tab1:
-    st.header("Portfolio Weights")
+    st.header("Portfolio Allocation")
 
     def weight_bar(weights, title, color):
         w = weights.dropna().sort_values(ascending=True)
@@ -142,7 +143,7 @@ with tab1:
 
 # ── TAB 2 ──────────────────────────────────────────────────────────
 with tab2:
-    st.header("Factor Risk Decomposition — The Central Finding")
+    st.header("Factor Risk Decomposition")
 
     factor_cols = ["Equity Premium","Term Premium","Credit Spread","Inflation","Liquidity","Idiosyncratic"]
     colors = [
@@ -188,7 +189,7 @@ with tab2:
 
 # ── TAB 3 ──────────────────────────────────────────────────────────
 with tab3:
-    st.header("Asset Class Deep Dive")
+    st.header("Asset Class Factor Profiles")
     selected = st.selectbox("Select Asset", list(result.betas.index))
 
     c1, c2 = st.columns(2)
@@ -237,7 +238,7 @@ with tab3:
 
 # ── TAB 4 ──────────────────────────────────────────────────────────
 with tab4:
-    st.header("Portfolio Construction Comparison")
+    st.header("Portfolio Construction")
     c1, c2 = st.columns(2)
 
     with c1:
@@ -354,27 +355,55 @@ with tab6:
     def get_monitor():
         from portfolio.cluster_monitor import ClusterMonitor
         from factors.factor_model import RollingFactorModel
-        rm = RollingFactorModel(dm.factor_returns_t1, dm.asset_returns_t1, window=20)
-        rm.fit()
-        hrp_order = list(portfolios["Enhanced HRP"].sort_values(ascending=False).index)
-        clusters  = ClusterMonitor.clusters_from_hrp(hrp_order, n_clusters=3)
-        monitor   = ClusterMonitor(
-            rolling_betas=rm.rolling_betas,
-            cluster_assignments=clusters,
-            baseline_window=8,
-            monitor_threshold=0.50,
-            rebalance_threshold=0.85,
-            persistence=2,
+
+        rm = RollingFactorModel(
+            dm.factor_returns_t1,
+            dm.asset_returns_t1,
+            window=20,
         )
-        monitor.compute()
-        return monitor, clusters
+        rm.fit()
 
+        portfolio_clusters = {}
+
+        hrp_order = list(portfolios["Enhanced HRP"].sort_values(ascending=False).index)
+        portfolio_clusters["Enhanced HRP"] = ClusterMonitor.clusters_from_hrp(hrp_order, n_clusters=3)
+
+        mvo_sorted = portfolios["MVO"].sort_values(ascending=False)
+        top_mvo  = list(mvo_sorted[mvo_sorted > 0.10].index)
+        rest_mvo = list(mvo_sorted[mvo_sorted <= 0.10].index)
+        portfolio_clusters["MVO"] = {
+            "core":      top_mvo  if top_mvo  else list(mvo_sorted.index[:3]),
+            "satellite": rest_mvo if rest_mvo else list(mvo_sorted.index[3:]),
+        }
+
+        rp_order = list(portfolios["Risk Parity"].sort_values(ascending=False).index)
+        portfolio_clusters["Risk Parity"] = ClusterMonitor.clusters_from_hrp(rp_order, n_clusters=3)
+
+        monitors = {}
+        for port_name, clusters in portfolio_clusters.items():
+            m = ClusterMonitor(
+                rolling_betas=rm.rolling_betas,
+                cluster_assignments=clusters,
+                baseline_window=8,
+                monitor_threshold=0.50,
+                rebalance_threshold=0.85,
+                persistence=2,
+            )
+            m.compute()
+            monitors[port_name] = (m, clusters)
+
+        return monitors
     with st.spinner("Computing cluster stability..."):
-        monitor, clusters = get_monitor()
-
+        monitors = get_monitor()
+    port_select = st.selectbox(
+        "Select Portfolio",
+        list(monitors.keys()),
+        key="monitor_port"
+    )
+    monitor, clusters = monitors[port_select]
+    
     status = monitor.current_status()
     signal_colors = {"HOLD":"#27AE60","MONITOR":"#E67E22","REBALANCE":"#C0392B"}
-    signal_icons  = {"HOLD":"✅","MONITOR":"⚠️","REBALANCE":"🚨"}
 
     st.subheader("Current Status")
     cols = st.columns(len(status))
@@ -382,12 +411,10 @@ with tab6:
         sig   = info["signal"]
         prob  = info["probability"]
         color = signal_colors.get(sig,"#27AE60")
-        icon  = signal_icons.get(sig,"✅")
         with cols[i]:
             st.markdown(
                 f"<div style='background:{color}22;border-left:4px solid {color};"
                 f"border-radius:8px;padding:16px;'>"
-                f"<h3 style='color:{color};margin:0'>{icon} {sig}</h3>"
                 f"<p><b>{cluster.upper()}</b></p>"
                 f"<p style='font-size:20px'>P = {prob:.1%}</p>"
                 f"<p style='font-size:11px;color:#888'>{info['date']}</p>"

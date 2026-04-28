@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 
 import pandas as pd
-
+from data.professor_loader import ProfessorLoader
 from config.settings import (
     DATA_CACHE_DIR,
     PUBLIC_ASSETS,
@@ -56,7 +56,8 @@ class DataManager:
         # Tier 2 — full universe including private markets
         self.factor_returns_t2: pd.DataFrame | None = None
         self.asset_returns_t2:  pd.DataFrame | None = None
-
+        self._professor = ProfessorLoader(use_cache=use_cache)
+        self.asset_returns_t1_complete:  pd.DataFrame | None = None
         # Shared
         self.recession: pd.Series | None = None
         self.rf:        pd.Series | None = None
@@ -182,15 +183,23 @@ class DataManager:
     def _to_quarterly(df: pd.DataFrame) -> pd.DataFrame:
         """
         Compound monthly returns to quarterly.
-
-        Formula: (1+r1)(1+r2)(1+r3) - 1
-        Mathematically exact — no approximation.
+        Returns NaN for quarters with no data.
         """
-        return (1 + df).resample("QE").prod() - 1
+        def compound(x):
+            valid = x.dropna()
+            if len(valid) == 0:
+                return float("nan")
+            return (1 + valid).prod() - 1
+        return df.resample("QE").apply(compound)
 
     @staticmethod
     def _to_quarterly_series(s: pd.Series) -> pd.Series:
-        return (1 + s).resample("QE").prod() - 1
+        def compound(x):
+            valid = x.dropna()
+            if len(valid) == 0:
+                return float("nan")
+            return (1 + valid).prod() - 1
+        return s.resample("QE").apply(compound)
 
     # ── Main build ─────────────────────────────────────────────────
 
@@ -235,10 +244,22 @@ class DataManager:
             self._build_liquidity(ps_liq),
         ], axis=1)
 
+
         # ── 3. Build monthly public asset returns ──────────────────
         public_monthly = self._build_public_assets(
             crsp_market, etf_returns
         )
+
+        # ── 3b. Load professor private assets ─────────────────────
+        professor_assets = self._professor.get_private_assets()
+        if not professor_assets.empty:
+            public_monthly = pd.concat(
+                [public_monthly, professor_assets], axis=1
+            )
+            logger.info(
+                f"Added professor assets: "
+                f"{list(professor_assets.columns)}"
+            )
 
         # ── 4. Convert to quarterly ────────────────────────────────
         # Return-based factors: compound monthly returns

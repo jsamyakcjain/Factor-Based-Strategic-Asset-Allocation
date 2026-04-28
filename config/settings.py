@@ -181,3 +181,23 @@ METHOD_COLORS: dict[str, str] = {
     "equal_weight": "#94A3B8",
     "sixty_forty":  "#6B7280",
 }
+
+ASSET_DISPLAY_NAMES: dict[str, str] = {
+    "us_large_cap":           "US Large Cap Equity",
+    "us_mid_cap":             "US Mid Cap Equity",
+    "us_small_cap":           "US Small Cap Equity",
+    "em_equity":              "Emerging Market Equity",
+    "long_treasury":          "Long Duration Treasury",
+    "tips":                   "TIPS",
+    "ig_credit":              "Investment Grade Credit",
+    "reits":                  "REITs",
+    "commodities":            "Commodities",
+    "hy_credit":              "High Yield Credit",
+    "hedge_funds":            "Hedge Funds",
+    "private_equity_unsmthd": "Private Equity",
+    "real_estate_unsmthd":    "Private Real Estate",
+    "private_equity":         "Private Equity",
+    "private_credit":         "Private Credit",
+    "private_real_estate":    "Private Real Estate",
+    "infrastructure":         "Infrastructure",
+}

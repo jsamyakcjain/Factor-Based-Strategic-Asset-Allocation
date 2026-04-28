@@ -11,7 +11,6 @@ from config.settings import (
     START_DATE_TIER2,
     FACTOR_NAMES
 )
-from data.ca_loader import CALoader
 from data.fred_loader import FREDLoader
 from data.market_loader import MarketLoader
 from data.wrds_loader import WRDSLoader
@@ -47,7 +46,6 @@ class DataManager:
         self._wrds   = WRDSLoader(use_cache=use_cache)
         self._fred   = FREDLoader(use_cache=use_cache)
         self._market = MarketLoader(use_cache=use_cache)
-        self._ca     = CALoader(use_cache=use_cache)
 
         # Tier 1 — public markets only
         self.factor_returns_t1: pd.DataFrame | None = None
@@ -300,7 +298,6 @@ class DataManager:
         )
 
         # ── 6. Tier 2 — full universe, 2004 to 2024 ───────────────
-        private_q = self._ca.get_private_market_returns()
 
         if private_q.empty:
             logger.warning(

@@ -13,13 +13,15 @@ logger = logging.getLogger(__name__)
 
 # Assets where equity liquidity (PS) is appropriate
 EQUITY_LIQUIDITY_ASSETS = [
-    "us_large_cap", "us_small_cap", "em_equity",
-    "reits", "commodities", "private_equity", "hedge_funds",
+    "us_large_cap", "us_mid_cap", "us_small_cap", "em_equity",
+    "reits", "commodities",
 ]
 
-# Assets where credit liquidity (BAA spread change) is appropriate
+# Private equity, real estate, hedge funds and all credit assets
+# use BAA-Treasury: liquidity driven by credit markets not equity microstructure
 CREDIT_LIQUIDITY_ASSETS = [
     "long_treasury", "tips", "ig_credit", "hy_credit",
+    "private_equity_unsmthd", "real_estate_unsmthd", "hedge_funds",
     "private_credit", "private_real_estate", "infrastructure",
 ]
 @dataclass
@@ -54,18 +56,6 @@ class BetaResult:
         print(f"{'='*65}\n")
 
 # Assets where equity liquidity (PS innovation) is appropriate
-EQUITY_LIQUIDITY_ASSETS = [
-    "us_large_cap", "us_small_cap", "em_equity",
-    "reits", "commodities", "private_equity", "hedge_funds",
-]
-
-# Assets where credit liquidity (BAA spread change) is appropriate
-CREDIT_LIQUIDITY_ASSETS = [
-    "long_treasury", "tips", "ig_credit", "hy_credit",
-    "private_credit", "private_real_estate", "infrastructure",
-]
-
-
 class OLSFactorModel:
     """
     Full-sample OLS factor model with Newey-West HAC

@@ -70,7 +70,7 @@ class EnhancedHRP:
         B_z = (B - mu) / sig
         dist_mtx = squareform(pdist(B_z, metric="euclidean"))
         return pd.DataFrame(dist_mtx, index=assets, columns=assets)
-        return pd.DataFrame(dist, index=assets, columns=assets)
+    
 
     # ── Clustering ────────────────────────────────────────────────
 

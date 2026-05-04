@@ -79,40 +79,40 @@ class POETCovariance:
 
     # ── Threshold selection ───────────────────────────────────────
 
-    def _universal_threshold(
-        self,
-        residuals: np.ndarray,
-        weights: np.ndarray,
-    ) -> float:
+    def _universal_threshold(self, residuals: np.ndarray, cv_folds: int = 5) -> float:
         """
-        Universal threshold from Fan et al. (2013).
-        tau = C * sqrt(log(p) / T)
-        where C is chosen by cross-validation.
-        We use C=0.5 following the paper's recommendation.
+        Threshold via 5-fold Cross-Validation over a grid of C values.
+        Ensures optimal noise reduction without hardcoding C=0.5.
         """
         T, p = residuals.shape
-        return 0.5 * np.sqrt(np.log(p) / T)
+        base = np.sqrt(np.log(p) / T)
+        Cs = np.linspace(0.1, 1.0, 10)
+        losses = []
+        
+        for C in Cs:
+            fold_loss = []
+            for fold in range(cv_folds):
+                # Hold out 1/cv_folds of rows, threshold on rest, score on held-out
+                mask = np.arange(T) % cv_folds != fold
+                S_train = np.cov(residuals[mask].T)
+                S_test  = np.cov(residuals[~mask].T)
+                S_train_thr = self._soft_threshold(S_train, C * base)
+                fold_loss.append(np.linalg.norm(S_train_thr - S_test, "fro"))
+            losses.append(np.mean(fold_loss))
+            
+        C_star = Cs[int(np.argmin(losses))]
+        return C_star * base
 
-    def _soft_threshold(
-        self,
-        matrix: np.ndarray,
-        tau: float,
-    ) -> np.ndarray:
+    def _soft_threshold(self, matrix: np.ndarray, tau: float) -> np.ndarray:
         """
         Soft thresholding of off-diagonal elements.
-        Shrinks small correlations to zero.
-        Preserves diagonal (idiosyncratic variances).
+         Shrinks small correlations to zero.
         """
         result = matrix.copy()
-        for i in range(matrix.shape[0]):
-            for j in range(matrix.shape[1]):
-                if i != j:
-                    if abs(matrix[i, j]) <= tau:
-                        result[i, j] = 0.0
-                    elif matrix[i, j] > tau:
-                        result[i, j] = matrix[i, j] - tau
-                    else:
-                        result[i, j] = matrix[i, j] + tau
+        # Fast vectorized soft-thresholding (much faster than nested loops)
+        off_diag_mask = ~np.eye(result.shape[0], dtype=bool)
+        vals = result[off_diag_mask]
+        result[off_diag_mask] = np.sign(vals) * np.maximum(np.abs(vals) - tau, 0)
         return result
 
     # ── Main estimation ───────────────────────────────────────────
@@ -150,8 +150,10 @@ class POETCovariance:
         )
 
         # ── 2. Compute residuals ───────────────────────────────────
-        # residuals = R - F·B'  (T x p)
-        residuals = R - F @ B.T
+        # residuals = R - alpha - F·B'  (T x p)
+        alpha_vec = self.betas.loc[assets_in_order, "alpha"].fillna(0).values
+        residuals = R - alpha_vec[np.newaxis, :] - F @ B.T
+        
         self.residuals = pd.DataFrame(
             residuals,
             index=self.assets.loc[common].index,
@@ -176,7 +178,8 @@ class POETCovariance:
         Corr_u = D_inv @ Sigma_u_raw @ D_inv
 
         # Apply threshold
-        tau = self._universal_threshold(residuals, w)
+        # Apply threshold (pass raw values, drop the unused 'w' arg)
+        tau = self._universal_threshold(residuals)
         Corr_u_thresh = self._soft_threshold(Corr_u, tau)
 
         # Convert back to covariance

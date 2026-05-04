@@ -34,7 +34,11 @@ from config.settings import ASSET_DISPLAY_NAMES
 
 def dn(a): return ASSET_DISPLAY_NAMES.get(a, a.replace("_"," ").title())
 
-dm = DataManager(use_cache=True); dm.load_cached()
+dm = DataManager(use_cache=False); dm.build()
+# Run quality control checks on the factors
+from factors.factor_proxies import FactorProxies
+fp = FactorProxies(dm.factor_returns_t1)
+fp.validate()
 ols = OLSFactorModel(dm.factor_returns_t1, dm.asset_returns_t1, credit_liquidity=dm.credit_liquidity)
 result = ols.fit()
 poet   = POETCovariance(dm.factor_returns_t1, dm.asset_returns_t1_complete, result.betas)
@@ -61,6 +65,61 @@ portfolios = {
 decomp = rd.compare(portfolios)
 qm = QuantileFactorModel(dm.factor_returns_t1, dm.asset_returns_t1); qm.fit()
 print("Models complete.")
+
+# ── Walk-Forward Out-Of-Sample Backtest ───────────────────────────
+print("Running walk-forward out-of-sample backtest (this may take a minute)...")
+asset_rets = dm.asset_returns_t1_complete.dropna()
+quarters = asset_rets.index
+min_window = 20 # 5-year burn-in
+step = 4        # Rebalance annually
+
+oos_returns = {n: [] for n in portfolios.keys()}
+oos_dates = []
+
+for i in range(min_window, len(quarters), step):
+    train_end = quarters[i-1]
+    oos_window = quarters[i : min(i+step, len(quarters))]
+    
+    # Slice training data
+    train_a = asset_rets.loc[:train_end]
+    train_f = dm.factor_returns_t1.loc[:train_end]
+    
+    # Re-fit models on training data only
+    train_ols = OLSFactorModel(train_f, train_a, credit_liquidity=dm.credit_liquidity).fit()
+    train_poet = POETCovariance(train_f, train_a, train_ols.betas).fit()
+    train_cov = train_poet.as_dataframe()
+    train_mu = ExpectedReturns(assets=list(train_cov.index)).quarterly()
+    
+    # Build dynamic weights
+    try:
+        w_mvo = MVO(train_mu, train_cov).fit()
+        w_rp = RiskParity(train_cov).fit()
+        w_hrp = EnhancedHRP(train_cov, train_ols.betas).fit()
+    except Exception as e:
+        # Fallback to previous weights if optimizer fails in a specific window
+        pass 
+
+    train_portfolios = {
+        "Equal Weight": rd.equal_weight(assets),
+        "60/40": rd.sixty_forty(eq_assets, bnd_assets),
+        "MVO": w_mvo,
+        "Risk Parity": w_rp,
+        "Enhanced HRP": w_hrp,
+    }
+    
+    # Record OOS returns
+    for q in oos_window:
+        oos_dates.append(q)
+        for name, w in train_portfolios.items():
+            w_al = w.reindex(asset_rets.columns).fillna(0)
+            if w_al.sum() != 0: w_al = w_al / w_al.sum()
+            oos_returns[name].append(float(asset_rets.loc[q] @ w_al))
+
+# Convert to pandas Series
+oos_pr = {n: pd.Series(oos_returns[n], index=oos_dates) for n in portfolios.keys()}
+# We must re-calculate the benchmark OOS for tracking error
+w_6040_oos = pd.Series(oos_returns["60/40"], index=oos_dates)
+
 
 # ── Style helpers ─────────────────────────────────────────────────
 NAVY   = "0A1628"; BLUE  = "1A3A5C"; PANEL  = "16202E"
@@ -122,34 +181,47 @@ w_al_6040 = w_6040.reindex(asset_rets.columns).fillna(0)
 if w_al_6040.sum() != 0: w_al_6040 = w_al_6040 / w_al_6040.sum()
 benchmark_ret = asset_rets @ w_al_6040
 
-def port_metrics(w):
+def port_metrics(w, pr_oos=None):
+    # Forward-looking point-in-time metrics (using full sample covariance/mu)
     wv = w.reindex(cov.index).fillna(0).values
     if wv.sum() != 0: wv = wv / wv.sum()
     mu_v = mu.reindex(cov.index).fillna(0).values
 
-    ann_ret = float(wv @ mu_v) * 4 * 100
-    ann_vol = float(np.sqrt(wv @ cov.values @ wv)) * 2 * 100
-    sharpe = ann_ret / ann_vol if ann_vol > 0 else 0
+    ann_ret_fwd = ((1 + float(wv @ mu_v)) ** 4 - 1) * 100
+    ann_vol_fwd = float(np.sqrt(wv @ cov.values @ wv)) * 2 * 100
+    
+    # Realized metrics use the Walk-Forward OOS returns!
+    if pr_oos is None:
+        w_al = w.reindex(asset_rets.columns).fillna(0)
+        if w_al.sum() != 0: w_al = w_al / w_al.sum()
+        pr = asset_rets @ w_al
+    else:
+        pr = pr_oos
 
-    w_al = w.reindex(asset_rets.columns).fillna(0)
-    if w_al.sum() != 0: w_al = w_al / w_al.sum()
-    pr = asset_rets @ w_al
+    ann_ret = ((1 + pr.mean()) ** 4 - 1) * 100
+    ann_vol = float(pr.std() * np.sqrt(4)) * 100
+
+    rf_q = 0.005 
+    rf_ann = ((1 + rf_q)**4 - 1) * 100
+    sharpe = (ann_ret - rf_ann) / ann_vol if ann_vol > 0 else 0
 
     cum = (1 + pr).cumprod()
     roll_max = cum.cummax()
     max_dd = float(((cum - roll_max) / roll_max).min()) * 100
     calmar = ann_ret / abs(max_dd) if max_dd < 0 else 0
 
-    excess_down = np.minimum(pr.values, 0.0)
-    downside_vol = float(np.std(excess_down) * np.sqrt(4) * 100)
-    sortino = ann_ret / downside_vol if downside_vol > 0 else 0
+    excess = pr - rf_q
+    downside = excess[excess < 0]
+    downside_vol = float(np.std(downside, ddof=1) * np.sqrt(4) * 100) if len(downside) > 1 else np.nan
+    sortino = (ann_ret - rf_ann) / downside_vol if downside_vol > 0 else np.nan
 
-    diff = pr - benchmark_ret
-    tracking_error = float(np.std(diff) * np.sqrt(4) * 100)
+    diff = pr - w_6040_oos
+    tracking_error = float(np.std(diff, ddof=1) * np.sqrt(4) * 100)
 
     return ann_ret, ann_vol, sharpe, sortino, max_dd, calmar, tracking_error, pr
 
-metrics = {n: port_metrics(w) for n, w in portfolios.items()}
+# Pass the out-of-sample returns into the metrics calculator
+metrics = {n: port_metrics(w, oos_pr[n]) for n, w in portfolios.items()}
 
 stress_periods = {
     "GFC (2008 Q3 - 2009 Q1)": ("2008-07-01", "2009-03-31"),

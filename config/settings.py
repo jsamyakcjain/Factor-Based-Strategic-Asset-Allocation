@@ -57,7 +57,7 @@ PRIVATE_ASSETS: list[str] = [
     "real_estate_unsmthd",
 ]
 
-ASSET_NAMES: list[str] = PUBLIC_ASSETS + PRIVATE_ASSETS
+ASSET_NAMES: list[str] = list(dict.fromkeys(PUBLIC_ASSETS + PRIVATE_ASSETS))
 N_ASSETS:    int       = len(ASSET_NAMES)
 
 # ── Factor Definitions ──────────────────────────────────────────────
@@ -79,6 +79,7 @@ FRED_SERIES: dict[str, str] = {
     "aaa_yield":      "AAA",        # Moody's AAA corporate yield
     "cpi":            "CPIAUCSL",
     "nber_recession": "USREC",
+    "hy_oas_true": "BAMLH0A0HYM2",  # ICE BofA US HY OAS (restricted on FRED since 2022)
 }
 
 # ── Benchmarks ──────────────────────────────────────────────────────

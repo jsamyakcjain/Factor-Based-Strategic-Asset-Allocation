@@ -75,10 +75,9 @@ class FREDLoader:
 
     def get_credit_spreads(self) -> pd.DataFrame:
         """
-        Credit spread proxy using Moody's corporate yields.
-        BAA yield minus 10Y Treasury yield.
-        Standard academic credit spread proxy back to 1919.
-        ICE BofA OAS restricted on FRED since 2022.
+        Credit spread proxy using Moody's BAA - 10Y Treasury.
+        Reverting from ICE BofA because FRED restricts ICE historical data 
+        to the last 18 months, which truncates the POET covariance matrix.
         """
         cached = self._load("credit_spreads")
         if cached is not None:
@@ -86,11 +85,14 @@ class FREDLoader:
 
         logger.info("Fetching Moody's credit spreads from FRED...")
         baa = self._fetch(FRED_SERIES["baa_yield"], "baa_yield")
+        aaa = self._fetch(FRED_SERIES["aaa_yield"], "aaa_yield")
         tsy = self._fetch(FRED_SERIES["treasury_10y"], "treasury_10y")
-        df = pd.concat([baa, tsy], axis=1).dropna()
+        
+        df = pd.concat([baa, aaa, tsy], axis=1).dropna()
         df["hy_oas"] = df["baa_yield"] - df["treasury_10y"]
         df["ig_oas"] = df["hy_oas"] * 0.5
-        df = df[["ig_oas", "hy_oas"]]
+        df = df[["ig_oas", "hy_oas", "baa_yield", "aaa_yield"]]
+        
         self._save(df, "credit_spreads")
         logger.info(f"Credit spreads: {len(df)} months")
         return df

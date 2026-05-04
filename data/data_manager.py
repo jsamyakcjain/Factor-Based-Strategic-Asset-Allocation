@@ -132,11 +132,11 @@ class DataManager:
         self, credit: pd.DataFrame
     ) -> pd.Series:
         """
-        Credit market liquidity = negative change in BAA-GS10 spread.
-        More relevant for fixed income assets than PS innovation.
-        Wide spread = tight credit liquidity conditions.
+        Credit market liquidity = AAA–BAA quality spread innovation.
+        Widens in flight-to-quality episodes regardless of headline 
+        HY spread direction. Solves collinearity with credit_spread.
         """
-        return (-credit["hy_oas"].diff()).rename("credit_liquidity")
+        return (-(credit["baa_yield"] - credit["aaa_yield"]).diff()).rename("credit_liquidity")
 
     # ── Asset construction ─────────────────────────────────────────
 
@@ -250,11 +250,9 @@ class DataManager:
 
         # ── 3b. Load professor private assets ─────────────────────
         professor_assets = self._professor.get_private_assets()
-        if not professor_assets.empty:
-            public_monthly = pd.concat(
-                [public_monthly, professor_assets], axis=1
-            )
-            logger.info(
+        private_monthly = professor_assets if not professor_assets.empty else pd.DataFrame()    
+            
+        logger.info(
                 f"Added professor assets: "
                 f"{list(professor_assets.columns)}"
             )
@@ -263,6 +261,10 @@ class DataManager:
         # Return-based factors: compound monthly returns
         factors_q   = self._to_quarterly(factors_monthly[FACTOR_NAMES])
         public_q    = self._to_quarterly(public_monthly)
+        private_q = (
+            self._to_quarterly(private_monthly) if not private_monthly.empty
+            else pd.DataFrame(index=public_q.index)
+        )       
         recession_q = recession.resample("QE").last().astype(int)
         rf_q        = self._to_quarterly_series(rf)
 

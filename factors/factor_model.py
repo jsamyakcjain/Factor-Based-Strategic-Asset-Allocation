@@ -167,13 +167,15 @@ class OLSFactorModel:
             )
 
             # Standardized betas — factor importance comparison
-            betas_std[asset]  = model.params[FACTOR_NAMES]
+            std_series = model.params[FACTOR_NAMES].copy()
+            std_series["alpha"] = model.params["const"]
+            betas_std[asset] = std_series
 
             # Unstandardized betas — re-scale to original units
             # β_raw = β_std / σ_factor
-            betas_raw[asset]  = (
-                model.params[FACTOR_NAMES] / F_std
-            )
+            raw_series = model.params[FACTOR_NAMES] / F_std
+            raw_series["alpha"] = model.params["const"]
+            betas_raw[asset] = raw_series
 
             t_stats[asset]    = model.tvalues[FACTOR_NAMES]
             p_values[asset]   = model.pvalues[FACTOR_NAMES]

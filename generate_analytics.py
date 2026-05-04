@@ -37,14 +37,19 @@ def dn(a): return ASSET_DISPLAY_NAMES.get(a, a.replace("_"," ").title())
 dm = DataManager(use_cache=False); dm.build()
 # Run quality control checks on the factors
 from factors.factor_proxies import FactorProxies
-fp = FactorProxies(dm.factor_returns_t1)
+fp = FactorProxies(dm.factor_returns_t2)
 fp.validate()
-ols = OLSFactorModel(dm.factor_returns_t1, dm.asset_returns_t1, credit_liquidity=dm.credit_liquidity)
+# Create a clean, aligned, complete-case dataset for the initial models
+clean_assets = dm.asset_returns_t2.dropna()
+clean_factors = dm.factor_returns_t2.loc[clean_assets.index]
+
+# Fit models on the clean data
+ols = OLSFactorModel(clean_factors, clean_assets, credit_liquidity=dm.credit_liquidity)
 result = ols.fit()
-poet   = POETCovariance(dm.factor_returns_t1, dm.asset_returns_t1_complete, result.betas)
+poet   = POETCovariance(clean_factors, clean_assets, result.betas)
 poet.fit()
 cov    = poet.as_dataframe()
-F      = dm.factor_returns_t1.astype(float)
+F      = clean_factors.astype(float)
 factor_cov = pd.DataFrame(np.cov(F.values.T), index=F.columns, columns=F.columns)
 er     = ExpectedReturns(assets=list(cov.index)); mu = er.quarterly()
 mvo_w  = MVO(mu, cov).fit()
@@ -63,7 +68,7 @@ portfolios = {
     "Enhanced HRP": hrp_w,
 }
 decomp = rd.compare(portfolios)
-qm = QuantileFactorModel(dm.factor_returns_t1, dm.asset_returns_t1); qm.fit()
+qm = QuantileFactorModel(dm.factor_returns_t2, dm.asset_returns_t2); qm.fit()
 print("Models complete.")
 
 # ── Walk-Forward Out-Of-Sample Backtest ───────────────────────────
@@ -176,13 +181,13 @@ factor_col_keys = list(factor_cov.index)
 
 # Benchmark definition (60/40)
 w_6040 = portfolios["60/40"]
-asset_rets = dm.asset_returns_t1_complete.dropna()
+asset_rets = dm.asset_returns_t2.dropna()
 w_al_6040 = w_6040.reindex(asset_rets.columns).fillna(0)
 if w_al_6040.sum() != 0: w_al_6040 = w_al_6040 / w_al_6040.sum()
 benchmark_ret = asset_rets @ w_al_6040
 
 def port_metrics(w, pr_oos=None):
-    # Forward-looking point-in-time metrics (using full sample covariance/mu)
+    # Forward-looking point-in-time metrics
     wv = w.reindex(cov.index).fillna(0).values
     if wv.sum() != 0: wv = wv / wv.sum()
     mu_v = mu.reindex(cov.index).fillna(0).values
@@ -195,7 +200,7 @@ def port_metrics(w, pr_oos=None):
     if w_al.sum() != 0: w_al = w_al / w_al.sum()
     pr_full = asset_rets @ w_al
 
-    # Evaluate metrics using OOS if available, else full history
+    # Evaluate summary metrics using OOS if available, else full history
     if pr_oos is None:
         pr_eval = pr_full
     else:
@@ -221,7 +226,7 @@ def port_metrics(w, pr_oos=None):
     diff = pr_eval - w_6040_oos
     tracking_error = float(np.std(diff, ddof=1) * np.sqrt(4) * 100)
 
-    # Return `pr_full` so the Excel builder gets the GFC dates back!
+    # Return `pr_full` so the Excel builder gets the full timeline back for the GFC!
     return ann_ret, ann_vol, sharpe, sortino, max_dd, calmar, tracking_error, pr_full
 
 # Pass the out-of-sample returns into the metrics calculator

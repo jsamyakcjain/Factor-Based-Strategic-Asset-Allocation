@@ -68,7 +68,7 @@ print("Models complete.")
 
 # ── Walk-Forward Out-Of-Sample Backtest ───────────────────────────
 print("Running walk-forward out-of-sample backtest (this may take a minute)...")
-asset_rets = dm.asset_returns_t1_complete.dropna()
+asset_rets = dm.asset_returns_t2.dropna()
 quarters = asset_rets.index
 min_window = 20 # 5-year burn-in
 step = 4        # Rebalance annually
@@ -82,7 +82,7 @@ for i in range(min_window, len(quarters), step):
     
     # Slice training data
     train_a = asset_rets.loc[:train_end]
-    train_f = dm.factor_returns_t1.loc[:train_end]
+    train_f = dm.factor_returns_t2.loc[:train_end]
     
     # Re-fit models on training data only
     train_ols = OLSFactorModel(train_f, train_a, credit_liquidity=dm.credit_liquidity).fit()
@@ -190,35 +190,39 @@ def port_metrics(w, pr_oos=None):
     ann_ret_fwd = ((1 + float(wv @ mu_v)) ** 4 - 1) * 100
     ann_vol_fwd = float(np.sqrt(wv @ cov.values @ wv)) * 2 * 100
     
-    # Realized metrics use the Walk-Forward OOS returns!
-    if pr_oos is None:
-        w_al = w.reindex(asset_rets.columns).fillna(0)
-        if w_al.sum() != 0: w_al = w_al / w_al.sum()
-        pr = asset_rets @ w_al
-    else:
-        pr = pr_oos
+    # Calculate full 20-year history of the final weights for Stress Testing (GFC fix)
+    w_al = w.reindex(asset_rets.columns).fillna(0)
+    if w_al.sum() != 0: w_al = w_al / w_al.sum()
+    pr_full = asset_rets @ w_al
 
-    ann_ret = ((1 + pr.mean()) ** 4 - 1) * 100
-    ann_vol = float(pr.std() * np.sqrt(4)) * 100
+    # Evaluate metrics using OOS if available, else full history
+    if pr_oos is None:
+        pr_eval = pr_full
+    else:
+        pr_eval = pr_oos
+
+    ann_ret = ((1 + pr_eval.mean()) ** 4 - 1) * 100
+    ann_vol = float(pr_eval.std() * np.sqrt(4)) * 100
 
     rf_q = 0.005 
     rf_ann = ((1 + rf_q)**4 - 1) * 100
     sharpe = (ann_ret - rf_ann) / ann_vol if ann_vol > 0 else 0
 
-    cum = (1 + pr).cumprod()
+    cum = (1 + pr_eval).cumprod()
     roll_max = cum.cummax()
     max_dd = float(((cum - roll_max) / roll_max).min()) * 100
     calmar = ann_ret / abs(max_dd) if max_dd < 0 else 0
 
-    excess = pr - rf_q
+    excess = pr_eval - rf_q
     downside = excess[excess < 0]
     downside_vol = float(np.std(downside, ddof=1) * np.sqrt(4) * 100) if len(downside) > 1 else np.nan
     sortino = (ann_ret - rf_ann) / downside_vol if downside_vol > 0 else np.nan
 
-    diff = pr - w_6040_oos
+    diff = pr_eval - w_6040_oos
     tracking_error = float(np.std(diff, ddof=1) * np.sqrt(4) * 100)
 
-    return ann_ret, ann_vol, sharpe, sortino, max_dd, calmar, tracking_error, pr
+    # Return `pr_full` so the Excel builder gets the GFC dates back!
+    return ann_ret, ann_vol, sharpe, sortino, max_dd, calmar, tracking_error, pr_full
 
 # Pass the out-of-sample returns into the metrics calculator
 metrics = {n: port_metrics(w, oos_pr[n]) for n, w in portfolios.items()}

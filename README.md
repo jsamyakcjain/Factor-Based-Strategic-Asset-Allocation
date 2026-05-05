@@ -155,11 +155,10 @@ The method of aggregation depends on what the series represents:
 
 | Series type | Aggregation | Why |
 |-------------|------------|-----|
-| Asset returns, equity premium, PS liquidity | Geometric compounding: `(1+r).prod() - 1` | Returns compound multiplicatively |
-| Credit spread changes, inflation (ΔCPI) | Arithmetic sum: `Δ.sum()` | Changes in levels add, not compound |
-| Liquidity levels (for snapshotting) | Quarter-end: `.resample('QE').last()` | Level variable — take the point-in-time value |
+| Asset returns, equity premium, term premium | Geometric compounding: `(1+r).prod() - 1` | Returns compound multiplicatively |
+| Credit spread changes, inflation (ΔCPI), PS liquidity innovations | Arithmetic sum: `Δ.sum()` | Level changes and AR(1) innovations add, not compound |
 
-**Common mistake:** Compounding spread differences gives wrong numbers (e.g., three months of +1bp, +1bp, +1bp compounded gives ~3.0003bp instead of 3bp). The code uses separate aggregation paths for each factor type.
+**Common mistake:** Compounding spread differences or innovations gives wrong numbers (e.g., three months of +1bp, +1bp, +1bp compounded gives ~3.0003bp instead of 3bp). PS liquidity (`ps_innov`) is a Pastor-Stambaugh AR(1) innovation — a level change, not a return — so it is summed arithmetically. The code uses separate aggregation paths for each factor type.
 
 ---
 
@@ -203,14 +202,16 @@ The rate of change of CPI all-items. TIPS load positively (inflation protection)
 
 ### Factor 5 — Liquidity
 
-Two different proxies depending on asset type:
+Two proxies are constructed, but only one is used in the POET covariance (see note below):
 
-| Asset group | Proxy | Source | Economic meaning |
-|-------------|-------|--------|-----------------|
-| US LC, MC, SC, EM equity, REITs, Commodities | Pastor-Stambaugh innovations (`ps_innov`) | WRDS `ff.liq_ps` | Equity market microstructure liquidity: bid-ask tightness, order-flow reversals |
-| Long Treasury, TIPS, IG, HY, PE, RE, Hedge Funds | `−Δ(BAA − AAA)` | FRED `BAA` and `AAA` | Credit market flight-to-quality: when quality spread widens, credit liquidity is tightening |
+| Proxy | Source | Economic meaning | Used for |
+|-------|--------|-----------------|---------|
+| Pastor-Stambaugh innovations (`ps_innov`) | WRDS `ff.liq_ps` | Equity market microstructure liquidity: bid-ask tightness, order-flow reversals | OLS estimation for equity assets |
+| `−Δ(BAA − AAA)` quality spread | FRED `BAA` and `AAA` | Credit market flight-to-quality: when quality spread widens, credit liquidity is tightening | OLS estimation for credit/alternative assets; **sole liquidity series in POET factor panel** |
 
-**Why two proxies?** Equity assets respond to *equity market* liquidity (can I trade my S&P 500 position at tight spreads?). Credit and alternative assets respond to *credit market* liquidity (are funding markets open? are investors fleeing to safety within credit?). NFCI was previously used for credit assets but was replaced because it blends equity and credit market signals — BAA-AAA quality spread is purely credit-specific and has a 100-year FRED history.
+**Why two proxies for OLS?** Equity assets respond to *equity market* liquidity (bid-ask spreads, order flow). Credit and alternative assets respond to *credit market* liquidity (funding stress, flight-to-quality). NFCI was previously used for credit assets but replaced because it blends equity, credit, and funding conditions — BAA-AAA quality spread is purely credit-specific and has a 100-year FRED history.
+
+**Why use only credit_liquidity in POET?** PS innovations have roughly 33× larger standard deviation than the quality spread change series. `OLSFactorModel` handles the dual proxy inside each asset regression (using `_get_asset_matrices` to swap in credit_liquidity for credit/alternative assets). But POET builds a single 5×5 factor covariance `Σ_f` shared across all assets. If the liquidity column used PS for some assets and quality spread for others, the off-diagonal terms in `Σ_f` would be on incomparable scales, making `B Σ_f B'` invalid. Replacing the liquidity column uniformly with credit_liquidity in the factor panel before POET estimation ensures `B Σ_f B'` is internally consistent.
 
 **Sign convention for quality spread:** `−Δ(BAA − AAA)` means the factor is positive when the quality spread *narrows* (credit conditions ease) and negative when it *widens* (flight to safety). Assets that benefit from easy credit conditions (HY credit, PE, private RE) load positively on this factor.
 
@@ -770,6 +771,12 @@ Pure recursive bisection uses IVP weights within each cluster. When asset volati
 ### Why forward-looking JPM returns are fixed across all OOS steps?
 
 In a realistic SAA, investors would update capital market assumptions at each rebalancing. However, re-estimating μ at each OOS step would require a proprietary forecasting model (Bayesian updating, factor valuation model, etc.). Using fixed JPM 2026 LTCMA for all steps is a simplifying assumption that focuses the walk-forward on demonstrating the value of the covariance model and portfolio construction methodology, not of return forecasting.
+
+### Why arithmetic sum for PS liquidity innovations and uniform credit_liquidity for POET?
+
+PS `ps_innov` is a Pastor-Stambaugh AR(1) *innovation* — the residual from regressing aggregate liquidity on its own lag. It is a change variable (not a return), so it should be summed arithmetically across months to obtain the quarterly value, not geometrically compounded. The same logic applies to credit spread changes and CPI changes: `(1 + Δspread).prod() − 1` would give ~3.0003bp instead of 3bp for three months of +1bp each.
+
+For POET consistency, the factor panel fed into `POETCovariance` replaces the PS liquidity column with `credit_liquidity` (quality spread change) uniformly across all 13 assets. `OLSFactorModel` still uses the dual proxy internally (via `_get_asset_matrices`), so each beta is estimated against the economically appropriate series. But POET needs one shared 5×5 `Σ_f`, and mixing PS (std ≈ 0.095) with quality spread change (std ≈ 0.003) in a single `Σ_f` row would produce off-diagonal covariances on incomparable scales, breaking `B Σ_f B'`. Using credit_liquidity uniformly keeps `Σ_f` internally consistent.
 
 ### Why full-sample returns for stress testing and cumulative charts?
 

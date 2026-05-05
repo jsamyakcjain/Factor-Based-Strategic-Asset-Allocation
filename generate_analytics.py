@@ -2,6 +2,24 @@
 Factor-Based SAA Analytics Report
 Run from project root: python generate_analytics.py
 Outputs: analytics_report.xlsx
+
+Pipeline:
+  DataManager  → quarterly factor panel (5 factors, geometric/arithmetic aggregation)
+               + quarterly asset panel (13 assets, geometric compounding)
+  OLSFactorModel   → 13×5 beta matrix, HAC t-stats, R²
+  QuantileFactorModel → Q10/Q50/Q90 conditional betas
+  POETCovariance   → 13×13 Σ_POET (EWM Σ_f, adaptive soft-threshold Σ_u)
+  ExpectedReturns  → quarterly excess μ from JPM 2026 LTCMA
+  MVO / ERC / EnhancedHRP → portfolio weights
+  FactorRiskDecomposition → Euler factor risk shares
+  WalkForwardBacktest     → 61 OOS quarters (20Q burn-in), honest Sharpe/Sortino/TE
+
+Liquidity note:
+  OLSFactorModel receives dm.credit_liquidity so each asset is regressed against
+  the economically appropriate proxy (PS for equity, quality spread for credit).
+  For POET consistency the liquidity column in the factor panel is unified to
+  credit_liquidity (quality spread change) — PS innovations have 33× larger std,
+  so mixing the two scales in one Σ_f would break B Σ_f B'.
 """
 from __future__ import annotations
 
@@ -97,7 +115,7 @@ q_factors_t1['liquidity'] = dm.credit_liquidity.reindex(q_factors_t1.index).fill
 # Tier 2 is already quarterly
 t2_assets = dm.asset_returns_t2
 
-# FIXED: Identify unique assets (Tier 2 takes priority for overlapping assets)
+# Identify unique assets (Tier 2 takes priority for overlapping assets)
 t1_only_assets = [a for a in q_assets_t1.columns if a not in t2_assets.columns]
 print(f"Tier 1 only assets: {t1_only_assets}")
 print(f"Tier 2 assets: {list(t2_assets.columns)}")
@@ -134,19 +152,16 @@ qm = QuantileFactorModel(final_q_factors, final_q_assets, credit_liquidity=dm.cr
 qm.fit()
 
 print("\n=== SCALE DIAGNOSTICS ===")
-print("Factor magnitudes (should be ~0.01-0.05):")
+print("Factor magnitudes (quarterly decimal, should be ~0.01-0.05):")
 print(final_q_factors.describe().loc[['mean', 'std']].round(6))
-print("\nAsset magnitudes (should be ~0.01-0.05):")
+print("\nAsset magnitudes (quarterly decimal, should be ~0.01-0.05):")
 print(final_q_assets.describe().loc[['mean', 'std']].round(6))
 print()
 
-# If means/stds differ by ~100x, scale mismatch confirmed
 factor_scale = final_q_factors['equity_premium'].std()
 asset_scale = final_q_assets['us_large_cap'].std()
 ratio = asset_scale / factor_scale
-print(f"Scale ratio (asset/factor): {ratio:.2f}")
-print(f"If ratio is ~100, factors need to be multiplied by 100")
-print(f"If ratio is ~0.01, assets need to be multiplied by 100")
+print(f"Scale ratio (us_large_cap / equity_premium std): {ratio:.2f}  — expected ~1.0")
 
 # ── 4. Covariance Estimation ───────────────────────────────────────
 # ── 4. Covariance Estimation ───────────────────────────────────────

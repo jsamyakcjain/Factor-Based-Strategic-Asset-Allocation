@@ -81,12 +81,18 @@ else:
 # ── 2. Data Alignment Block ────────────────────────────────────────
 print("Aligning data to quarterly frequency...")
 
-# Roll Tier 1 monthly to quarterly
-q_factors_t1 = (1 + dm.factor_returns_t1).resample('QE').prod() - 1
+# dm.factor_returns_t1 is already quarterly (aggregated in DataManager).
+# equity_premium / term_premium were compounded geometrically (they are returns).
+# credit_spread / inflation / liquidity (PS) were summed arithmetically (level changes).
+q_factors_t1 = dm.factor_returns_t1.copy()
 q_assets_t1 = (1 + dm.asset_returns_t1_complete).resample('QE').prod() - 1
 
-# Liquidity: snapshot at quarter-end
-q_factors_t1['liquidity'] = dm.credit_liquidity.resample('QE').last()
+# Use credit_liquidity (quality spread change) as the single liquidity factor for all
+# assets so that the POET factor covariance is internally consistent: every beta in B
+# is estimated against the same series, so B Sigma_f B' is well-defined.
+# (Using PS for equities and credit_liquidity for bonds would mix scales and break POET.)
+# OLSFactorModel still receives credit_liquidity separately to handle standardisation.
+q_factors_t1['liquidity'] = dm.credit_liquidity.reindex(q_factors_t1.index).fillna(0)
 
 # Tier 2 is already quarterly
 t2_assets = dm.asset_returns_t2

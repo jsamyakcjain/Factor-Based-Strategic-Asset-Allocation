@@ -151,12 +151,14 @@ class DataManager:
             logger.info(f"Loaded professor assets: {list(professor_assets.columns)}")
 
         # ── 4. Convert to quarterly ────────────────────────────────
-        geom_factors = ["equity_premium", "term_premium", "liquidity"]
-        arith_factors = ["credit_spread", "inflation"]
+        # Returns (multiplicative) → geometric compounding
+        # Level changes / innovations (additive) → arithmetic sum
+        geom_factors  = ["equity_premium", "term_premium"]           # monthly excess returns
+        arith_factors = ["credit_spread", "inflation", "liquidity"]  # level changes / AR(1) residuals
 
-        factors_geom = self._to_quarterly(factors_monthly[geom_factors])
+        factors_geom  = self._to_quarterly(factors_monthly[geom_factors])
         factors_arith = self._to_quarterly_sum(factors_monthly[arith_factors])
-        
+
         factors_q = pd.concat([factors_geom, factors_arith], axis=1)[FACTOR_NAMES]
         
         public_q = self._to_quarterly(public_monthly)

@@ -5,7 +5,6 @@ import logging
 
 import numpy as np
 import pandas as pd
-from scipy.linalg import sqrtm
 
 from config.settings import FACTOR_NAMES
 
@@ -13,173 +12,127 @@ logger = logging.getLogger(__name__)
 
 
 class POETCovariance:
-    """
-    Principal Orthogonal complEment Thresholding (POET).
-    Fan, Liao, Mincheva (2013) — Journal of the Royal Statistical Society.
-
-    Decomposes covariance into:
-        Σ = B · Σ_f · B' + Σ_u (thresholded)
-
-    Where:
-        B    = factor loading matrix (n_assets x n_factors)
-        Σ_f  = factor covariance matrix (n_factors x n_factors)
-        Σ_u  = thresholded residual covariance (sparse)
-
-    Why POET over Ledoit-Wolf:
-    - Designed specifically for factor-structured data
-    - Thresholds residual correlations to remove noise
-    - Produces sparser, more interpretable covariance
-    - Better condition number for portfolio optimization
-    - Used in MSCI Barra methodology
-
-    WLS decay=0.94 option:
-    - Exponentially weights recent observations more
-    - RiskMetrics standard for institutional covariance
-    - More relevant for current portfolio construction
-    - Used ONLY for MVO inputs, not for regression betas
-    """
-
     def __init__(
         self,
         factor_returns: pd.DataFrame,
-        asset_returns:  pd.DataFrame,
-        beta_matrix:    pd.DataFrame,
-        decay:          float = 1.0,
+        asset_returns: pd.DataFrame,
+        beta_matrix: pd.DataFrame,
+        decay: float = 1.0,
+        start_date: str | None = None,
+        alphas: pd.Series | None = None,
     ) -> None:
-        self.factors     = factor_returns.astype(float)
-        self.assets      = asset_returns.astype(float)
-        self.betas       = beta_matrix
-        self.decay       = decay
-        self.sigma:      np.ndarray | None = None
-        self.sigma_lw:   np.ndarray | None = None
-        self.residuals:  pd.DataFrame | None = None
-
-    # ── Weights ───────────────────────────────────────────────────
+        self.factors = factor_returns.astype(float)
+        self.assets = asset_returns.astype(float)
+        self.betas = beta_matrix
+        self.decay = decay
+        self.start_date = start_date
+        self.alphas = alphas
+        self.sigma: np.ndarray | None = None
+        self.sigma_lw: np.ndarray | None = None
+        self.factor_cov: np.ndarray | None = None
+        self.residuals: pd.DataFrame | None = None
+        self._valid_assets: list[str] = []
 
     def _exp_weights(self, T: int) -> np.ndarray:
-        """
-        Exponentially decaying weights.
-        w_t = decay^(T-t), normalized to sum to 1.
-        decay=1.0 gives equal weights (standard OLS).
-        decay=0.94 gives RiskMetrics weighting.
-        """
         w = np.array([self.decay ** i for i in range(T)])
         w = w[::-1]
         return w / w.sum()
 
-    # ── Weighted covariance ───────────────────────────────────────
-
     def _weighted_cov(self, X: np.ndarray) -> np.ndarray:
-        """Compute weighted covariance matrix."""
         T = X.shape[0]
         w = self._exp_weights(T)
         mu = np.average(X, weights=w, axis=0)
         X_c = X - mu
         return (X_c.T * w) @ X_c
 
-    # ── Threshold selection ───────────────────────────────────────
-
-    def _universal_threshold(
-        self,
-        residuals: np.ndarray,
-        weights: np.ndarray,
-    ) -> float:
-        """
-        Universal threshold from Fan et al. (2013).
-        tau = C * sqrt(log(p) / T)
-        where C is chosen by cross-validation.
-        We use C=0.5 following the paper's recommendation.
-        """
+    def _universal_threshold(self, residuals: np.ndarray, weights: np.ndarray) -> float:
         T, p = residuals.shape
-        return 0.5 * np.sqrt(np.log(p) / T)
+        T_eff = 1.0 / np.sum(weights ** 2) if self.decay < 1.0 else T
+        # Adaptive C following Fan & Liao (2013): tau = C * sqrt(log(p)/T).
+        # C >= 2 is the theoretical minimum; scale up for fat-tailed residuals.
+        std_u = np.sqrt(np.average(residuals ** 2, weights=weights, axis=0).clip(1e-20))
+        r_std = residuals / std_u
+        excess_kurt = max(
+            float(np.mean(np.average(r_std ** 4, weights=weights, axis=0))) - 3.0, 0.0
+        )
+        C = float(np.clip(2.0 + 0.5 * np.sqrt(excess_kurt), 1.5, 4.0))
+        return C * np.sqrt(np.log(p) / T_eff)
 
-    def _soft_threshold(
-        self,
-        matrix: np.ndarray,
-        tau: float,
-    ) -> np.ndarray:
-        """
-        Soft thresholding of off-diagonal elements.
-        Shrinks small correlations to zero.
-        Preserves diagonal (idiosyncratic variances).
-        """
-        result = matrix.copy()
-        for i in range(matrix.shape[0]):
-            for j in range(matrix.shape[1]):
-                if i != j:
-                    if abs(matrix[i, j]) <= tau:
-                        result[i, j] = 0.0
-                    elif matrix[i, j] > tau:
-                        result[i, j] = matrix[i, j] - tau
-                    else:
-                        result[i, j] = matrix[i, j] + tau
+    def _soft_threshold(self, matrix: np.ndarray, tau: float) -> np.ndarray:
+        result = np.sign(matrix) * np.maximum(np.abs(matrix) - tau, 0.0)
+        np.fill_diagonal(result, np.diag(matrix))
         return result
 
-    # ── Main estimation ───────────────────────────────────────────
+    def fit(self) -> "POETCovariance":
+        # ── 1. Safe Alignment ──────────────────────────────────────
+        valid_assets = [a for a in self.assets.columns if a in self.betas.index]
 
-    def fit(self) -> POETCovariance:
-        """
-        Estimate POET covariance matrix.
+        combined = pd.concat([
+            self.factors[FACTOR_NAMES],
+            self.assets[valid_assets]
+        ], axis=1)
 
-        Steps:
-        1. Align factor and asset returns
-        2. Compute residuals from factor model
-        3. Estimate factor covariance Σ_f
-        4. Compute systematic covariance B·Σ_f·B'
-        5. Estimate residual covariance Σ_u
-        6. Apply soft thresholding to Σ_u
-        7. Combine: Σ_POET = B·Σ_f·B' + Σ_u_thresholded
-        8. Ensure positive definiteness
+        # ── 2. Apply start_date filter if provided ─────────────────
+        if self.start_date is not None:
+            start_dt = pd.Timestamp(self.start_date)
+            combined = combined[combined.index >= start_dt]
+            logger.info(f"POET: Enforcing start date {self.start_date}")
 
-        Returns self for method chaining.
-        """
-        # ── 1. Align ───────────────────────────────────────────────
-        common = self.factors.index.intersection(self.assets.index)
-        F = self.factors.loc[common].values
-        R = self.assets.loc[common].values
+        # Drop incomplete rows
+        combined = combined.dropna()
+
+        if combined.empty:
+            raise ValueError("No overlapping dates found across factors and valid assets.")
+
+        # Log date range
+        logger.info(f"POET: Using data from {combined.index[0].date()} to {combined.index[-1].date()}")
+        logger.info(f"POET: {len(combined)} observations")
+
+        common = combined.index
+        F = combined[FACTOR_NAMES].values
+        R = combined[valid_assets].values
         T, p = R.shape
         k = F.shape[1]
 
-        # Align beta matrix to asset order
-        assets_in_order = list(self.assets.columns)
-        B = self.betas.loc[assets_in_order, FACTOR_NAMES].values
-        # B is (p x k)
+        # Extract Betas safely matching the valid assets
+        B = self.betas.loc[valid_assets, FACTOR_NAMES].values
 
-        logger.info(
-            f"POET: T={T} quarters, p={p} assets, k={k} factors"
-        )
+        logger.info(f"POET: T={T} quarters, p={p} assets, k={k} factors")
 
-        # ── 2. Compute residuals ───────────────────────────────────
-        # residuals = R - F·B'  (T x p)
-        residuals = R - F @ B.T
-        self.residuals = pd.DataFrame(
-            residuals,
-            index=self.assets.loc[common].index,
-            columns=self.assets.columns,
-        )
-
-        # ── 3. Factor covariance ───────────────────────────────────
+        # ── 3. Compute residuals ───────────────────────────────────
         w = self._exp_weights(T)
-        Sigma_f = self._weighted_cov(F)   # (k x k)
 
-        # ── 4. Systematic covariance ───────────────────────────────
-        Sigma_systematic = B @ Sigma_f @ B.T   # (p x p)
+        if self.alphas is not None:
+            # Use proper alphas from OLS for residual construction
+            alphas_arr = self.alphas.reindex(valid_assets).fillna(0).values
+            residuals = R - alphas_arr - F @ B.T
+        else:
+            # Fallback: estimate alpha as weighted mean of raw residuals
+            raw_residuals = R - F @ B.T
+            est_alphas = np.average(raw_residuals, weights=w, axis=0)
+            residuals = raw_residuals - est_alphas
 
-        # ── 5. Residual covariance ─────────────────────────────────
-        Sigma_u_raw = self._weighted_cov(residuals)   # (p x p)
+        self.residuals = pd.DataFrame(residuals, index=common, columns=valid_assets)
 
-        # ── 6. Threshold residual covariance ──────────────────────
-        # Convert to correlation for thresholding
+        # ── 4. Factor covariance ───────────────────────────────────
+        Sigma_f = self._weighted_cov(F)
+        self.factor_cov = Sigma_f
+
+        # ── 5. Systematic covariance ───────────────────────────────
+        Sigma_systematic = B @ Sigma_f @ B.T
+
+        # ── 6. Residual covariance ─────────────────────────────────
+        Sigma_u_raw = self._weighted_cov(residuals)
+
+        # ── 7. Threshold residual covariance ───────────────────────
         std_u = np.sqrt(np.diag(Sigma_u_raw))
         std_u = np.where(std_u < 1e-10, 1e-10, std_u)
         D_inv = np.diag(1.0 / std_u)
         Corr_u = D_inv @ Sigma_u_raw @ D_inv
 
-        # Apply threshold
         tau = self._universal_threshold(residuals, w)
         Corr_u_thresh = self._soft_threshold(Corr_u, tau)
 
-        # Convert back to covariance
         D = np.diag(std_u)
         Sigma_u_thresh = D @ Corr_u_thresh @ D
 
@@ -188,107 +141,86 @@ class POETCovariance:
             f"sparsity={np.mean(Corr_u_thresh == 0):.1%}"
         )
 
-        # ── 7. POET covariance ─────────────────────────────────────
+        # ── 8. POET covariance ─────────────────────────────────────
         Sigma_poet = Sigma_systematic + Sigma_u_thresh
 
-        # ── 8. Positive definiteness ──────────────────────────────
-        Sigma_poet = self._ensure_pd(Sigma_poet)
+        # ── 9. Positive definiteness ───────────────────────────────
+        self.sigma = self._ensure_pd(Sigma_poet)
 
-        self.sigma = Sigma_poet
+        # Storing valid_assets for downstream labeling
+        self._valid_assets = valid_assets
 
-        # Diagnostics
         self._log_diagnostics(Sigma_systematic, Sigma_u_thresh)
-
         return self
 
     def _ensure_pd(self, matrix: np.ndarray) -> np.ndarray:
-        """
-        Ensure matrix is positive definite by adding
-        small diagonal perturbation if needed.
-        """
-        # Symmetrize first
         matrix = (matrix + matrix.T) / 2
         try:
             min_eig = np.linalg.eigvalsh(matrix).min()
         except np.linalg.LinAlgError:
-            # fallback: add small diagonal and retry
             matrix = matrix + 1e-6 * np.eye(matrix.shape[0])
             min_eig = np.linalg.eigvalsh(matrix).min()
+
         if min_eig < 1e-8:
             delta = abs(min_eig) + 1e-6
             matrix = matrix + delta * np.eye(matrix.shape[0])
         return matrix
 
-    def _log_diagnostics(
-        self,
-        systematic: np.ndarray,
-        residual:   np.ndarray,
-    ) -> None:
-        """Log diagnostics for the POET decomposition."""
-        p = self.sigma.shape[0]
-        total_var  = np.trace(self.sigma)
-        syst_var   = np.trace(systematic)
-        resid_var  = np.trace(residual)
-        cond_num   = np.linalg.cond(self.sigma)
-        min_eig    = np.linalg.eigvalsh(self.sigma).min()
+    def _log_diagnostics(self, systematic: np.ndarray, residual: np.ndarray) -> None:
+        total_var = np.trace(self.sigma)
+        syst_var = np.trace(systematic)
+        resid_var = np.trace(residual)
+        cond_num = np.linalg.cond(self.sigma)
+        min_eig = np.linalg.eigvalsh(self.sigma).min()
 
-        logger.info(f"POET diagnostics:")
-        logger.info(
-            f"  Systematic variance share : "
-            f"{syst_var/total_var:.1%}"
-        )
-        logger.info(
-            f"  Idiosyncratic variance share: "
-            f"{resid_var/total_var:.1%}"
-        )
+        logger.info("POET diagnostics:")
+        logger.info(f"  Systematic variance share : {syst_var/total_var:.1%}")
+        logger.info(f"  Idiosyncratic variance share: {resid_var/total_var:.1%}")
         logger.info(f"  Condition number : {cond_num:.1f}")
         logger.info(f"  Min eigenvalue   : {min_eig:.6f}")
-        logger.info(
-            f"  Matrix is PD     : {min_eig > 0}"
-        )
+        logger.info(f"  Matrix is PD     : {min_eig > 0}")
 
-    # ── Ledoit-Wolf comparison ────────────────────────────────────
-
-    def fit_ledoit_wolf(self) -> POETCovariance:
-        """
-        Ledoit-Wolf shrinkage estimator for comparison.
-        Standard alternative to POET.
-        Shows POET is more stable for factor-structured data.
-        """
+    def fit_ledoit_wolf(self) -> "POETCovariance":
         from sklearn.covariance import LedoitWolf
 
-        common = self.factors.index.intersection(self.assets.index)
-        R = self.assets.loc[common].values.astype(float)
+        combined = pd.concat([
+            self.factors[FACTOR_NAMES],
+            self.assets[self._valid_assets]
+        ], axis=1)
+
+        if self.start_date is not None:
+            start_dt = pd.Timestamp(self.start_date)
+            combined = combined[combined.index >= start_dt]
+
+        combined = combined.dropna()
+        R = combined[self._valid_assets].values
 
         lw = LedoitWolf()
         lw.fit(R)
         self.sigma_lw = lw.covariance_
 
-        cond_lw   = np.linalg.cond(self.sigma_lw)
+        cond_lw = np.linalg.cond(self.sigma_lw)
         min_eig_lw = np.linalg.eigvalsh(self.sigma_lw).min()
 
-        logger.info(
-            f"Ledoit-Wolf: cond={cond_lw:.1f}  "
-            f"min_eig={min_eig_lw:.6f}"
-        )
+        logger.info(f"Ledoit-Wolf: cond={cond_lw:.1f}  min_eig={min_eig_lw:.6f}")
         return self
 
-    # ── Output helpers ────────────────────────────────────────────
+    def as_dataframe(self) -> pd.DataFrame:
+        if self.sigma is None:
+            raise ValueError("Must call fit() before accessing covariance dataframe.")
 
-    def as_dataframe(self, ew: bool = False) -> pd.DataFrame:
-        """Return POET covariance as labeled DataFrame."""
-        mat = self.sigma
         return pd.DataFrame(
-            mat,
-            index=self.assets.columns,
-            columns=self.assets.columns,
+            self.sigma,
+            index=self._valid_assets,
+            columns=self._valid_assets,
         )
 
     def correlation_matrix(self) -> pd.DataFrame:
-        """Return correlation matrix derived from POET."""
         cov = self.as_dataframe()
         std = np.sqrt(np.diag(cov.values))
+        std = np.where(std < 1e-10, 1e-10, std)
         corr = cov.values / np.outer(std, std)
+
         return pd.DataFrame(
             corr,
             index=cov.index,
@@ -296,29 +228,24 @@ class POETCovariance:
         )
 
     def compare_with_lw(self) -> pd.DataFrame:
-        """
-        Compare POET vs Ledoit-Wolf diagnostics.
-        Shows POET produces better conditioned matrix
-        for factor-structured asset returns.
-        """
         if self.sigma_lw is None:
             self.fit_ledoit_wolf()
 
         metrics = {
             "Condition Number": {
-                "POET":        np.linalg.cond(self.sigma),
+                "POET": np.linalg.cond(self.sigma),
                 "Ledoit-Wolf": np.linalg.cond(self.sigma_lw),
             },
             "Min Eigenvalue": {
-                "POET":        np.linalg.eigvalsh(self.sigma).min(),
+                "POET": np.linalg.eigvalsh(self.sigma).min(),
                 "Ledoit-Wolf": np.linalg.eigvalsh(self.sigma_lw).min(),
             },
             "Max Eigenvalue": {
-                "POET":        np.linalg.eigvalsh(self.sigma).max(),
+                "POET": np.linalg.eigvalsh(self.sigma).max(),
                 "Ledoit-Wolf": np.linalg.eigvalsh(self.sigma_lw).max(),
             },
             "Trace": {
-                "POET":        np.trace(self.sigma),
+                "POET": np.trace(self.sigma),
                 "Ledoit-Wolf": np.trace(self.sigma_lw),
             },
         }

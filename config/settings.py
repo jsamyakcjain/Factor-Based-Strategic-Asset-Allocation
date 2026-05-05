@@ -93,7 +93,7 @@ BENCHMARKS: dict[str, str] = {
     "ig_credit":           "Bloomberg US Corp IG Total Return",
     "hy_credit":           "ICE BofA US HY Total Return",
     "reits":               "FTSE NAREIT All Equity Total Return",
-    "commodities":         "S&P GSCI Total Return",
+    "commodities":         "Bloomberg Commodity Index Total Return (PCRIX)",
     "private_equity":      "Cambridge Associates US PE Index",
     "private_credit":      "Cambridge Associates US Private Credit",
     "private_real_estate": "Cambridge Associates US Real Estate",

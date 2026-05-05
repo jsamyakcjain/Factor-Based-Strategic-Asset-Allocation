@@ -2,218 +2,218 @@ from __future__ import annotations
 
 import logging
 import warnings
-warnings.filterwarnings("ignore")
 
 import numpy as np
 import pandas as pd
-from scipy.cluster.hierarchy import linkage, dendrogram
+from scipy.cluster.hierarchy import linkage, leaves_list
 from scipy.spatial.distance import squareform
 
 from config.settings import FACTOR_NAMES
 
+warnings.filterwarnings("ignore")
 logger = logging.getLogger(__name__)
 
 
 class EnhancedHRP:
     """
-    Enhanced Hierarchical Risk Parity using factor loading
-    distance matrix for clustering.
+    Enhanced Hierarchical Risk Parity (Lopez de Prado, 2016).
 
-    Standard HRP (Lopez de Prado 2016) clusters assets by
-    price correlation. Enhanced HRP clusters by factor loading
-    profiles — the economic risk DNA of each asset.
+    Enhancement over vanilla HRP: the clustering distance matrix is built from
+    factor-residual correlation (Sigma_idio = Sigma - B Sigma_f B') so the
+    dendrogram reflects idiosyncratic co-movement rather than shared factor
+    exposure.  Recursive bisection then uses the full POET covariance so that
+    systematic variance is properly priced into each cluster's risk budget.
 
-    Distance metric:
-        d(i,j) = sqrt(Σ_k (β_ik - β_jk)²)
-
-    Assets with similar factor loadings cluster together.
-    The algorithm then allocates across clusters first,
-    then within clusters — ensuring genuine factor
-    diversification rather than just asset count diversification.
-
-    This is the key innovation of the paper:
-    - MVO: return-driven, concentrates in high-return assets
-    - Risk Parity: equalizes asset-level risk, not factor-level
-    - Enhanced HRP: explicitly targets factor diversification
-      through the clustering step
-
-    The comparison of factor risk decomposition across these
-    three methods is the central empirical finding.
+    Steps
+    -----
+    1. Residual covariance  →  factor-adjusted correlation  →  distance matrix
+    2. Ward-linkage hierarchical clustering
+    3. Quasi-diagonalization  (leaf ordering via scipy ``leaves_list``)
+    4. Recursive bisection   (weight ∝ inverse cluster variance)
     """
 
     def __init__(
         self,
-        covariance:   pd.DataFrame,
-        beta_matrix:  pd.DataFrame,
+        covariance: pd.DataFrame,
+        beta_matrix: pd.DataFrame,
+        factor_cov: pd.DataFrame | None = None,
+        max_weight: float = 0.20,
     ) -> None:
-        self.sigma   = covariance
-        self.betas   = beta_matrix
-        self.weights: pd.Series | None = None
-        self.clusters: list | None = None
+        self.sigma      = covariance
+        self.betas      = beta_matrix
+        self.factor_cov = factor_cov
+        self.max_weight = max_weight
 
-    # ── Distance matrix ───────────────────────────────────────────
+        self.weights:      pd.Series | None  = None
+        self.sorted_items: list[str]         = []
+        self.link_matrix:  np.ndarray | None = None
 
-    def _factor_distance_matrix(self) -> pd.DataFrame:
+    # ── Correlation / Distance helpers ────────────────────────────
+
+    @staticmethod
+    def _cov_to_corr(cov: np.ndarray) -> np.ndarray:
+        std = np.sqrt(np.maximum(np.diag(cov), 1e-14))
+        corr = cov / np.outer(std, std)
+        np.fill_diagonal(corr, 1.0)
+        return np.clip(corr, -1.0, 1.0)
+
+    @staticmethod
+    def _corr_to_dist(corr: np.ndarray) -> np.ndarray:
+        """Lopez de Prado distance: d(i,j) = sqrt(0.5 * (1 − ρ))."""
+        return np.sqrt(np.maximum(0.5 * (1.0 - corr), 0.0))
+
+    def _factor_adj_corr(self, assets: list[str]) -> np.ndarray:
         """
-        Build distance matrix from standardised factor loading profiles.
-        Z-score per factor before Euclidean distance so each factor
-        contributes equally regardless of numerical scale.
-        Without standardisation, equity premium (range 0.1-1.2) would
-        dominate inflation (range 0.01-0.08) purely due to scale.
+        Idiosyncratic correlation for clustering.
+
+        Remove the factor-driven covariance so assets group by idiosyncratic
+        similarity, not by shared beta exposure.
         """
-        from scipy.spatial.distance import pdist, squareform
-        assets = list(self.sigma.index)
-        B = self.betas.reindex(assets)[FACTOR_NAMES].values.astype(float)
-        mu  = B.mean(axis=0)
-        sig = B.std(axis=0)
-        sig[sig == 0] = 1.0
-        B_z = (B - mu) / sig
-        dist_mtx = squareform(pdist(B_z, metric="euclidean"))
-        return pd.DataFrame(dist_mtx, index=assets, columns=assets)
-    
+        Sigma = self.sigma.loc[assets, assets].values.astype(float)
 
-    # ── Clustering ────────────────────────────────────────────────
+        if self.factor_cov is not None:
+            B       = self.betas.loc[assets, FACTOR_NAMES].values.astype(float)
+            Sigma_f = self.factor_cov.values.astype(float)
+            Sigma_sys  = B @ Sigma_f @ B.T
+            Sigma_idio = Sigma - Sigma_sys
 
-    def _get_quasi_diagonal(
-        self, link: np.ndarray, n: int
-    ) -> list[int]:
+            # Preserve positive diagonal  (numerical safety)
+            diag_full = np.diag(Sigma)
+            np.fill_diagonal(
+                Sigma_idio,
+                np.maximum(np.diag(Sigma_idio), diag_full * 0.01),
+            )
+
+            # Project onto PSD cone
+            eigvals, eigvecs = np.linalg.eigh(Sigma_idio)
+            eigvals = np.maximum(eigvals, 0.0)
+            Sigma_idio = eigvecs @ np.diag(eigvals) @ eigvecs.T
+
+            return self._cov_to_corr(Sigma_idio)
+
+        return self._cov_to_corr(Sigma)
+
+    # ── Hierarchical Clustering ────────────────────────────────────
+
+    def _build_linkage(self, assets: list[str]) -> np.ndarray:
+        """Ward linkage on the factor-adjusted distance matrix."""
+        corr      = self._factor_adj_corr(assets)
+        dist      = self._corr_to_dist(corr)
+        condensed = squareform(dist, checks=False)
+        return linkage(condensed, method="ward")
+
+    # ── Recursive Bisection ────────────────────────────────────────
+
+    def _ivp(self, sub_assets: list[str]) -> np.ndarray:
+        """Inverse-variance portfolio weights for a sub-cluster."""
+        var = np.maximum(np.diag(self.sigma.loc[sub_assets, sub_assets].values), 1e-14)
+        w   = 1.0 / var
+        return w / w.sum()
+
+    def _cluster_var(self, sub_assets: list[str]) -> float:
+        """Variance of the IVP portfolio for a sub-cluster."""
+        cov_sub = self.sigma.loc[sub_assets, sub_assets].values.astype(float)
+        w       = self._ivp(sub_assets)
+        return float(w @ cov_sub @ w)
+
+    def _recursive_bisect(self, sorted_assets: list[str]) -> pd.Series:
         """
-        Sort assets by hierarchical clustering linkage.
-        Produces quasi-diagonal covariance matrix ordering.
-        Similar assets placed adjacent — reduces off-diagonal
-        covariance for bisection step.
+        Allocate weights by walking up the dendrogram.
+
+        At each bisection the left cluster receives fraction
+            α = var_right / (var_left + var_right)
+        so the lower-variance cluster captures proportionally more weight.
         """
-        link = link.astype(int)
-        sort_ix = pd.Series([link[-1, 0], link[-1, 1]])
+        weights  = pd.Series(1.0, index=sorted_assets)
+        clusters = [list(sorted_assets)]
 
-        num_items = link[-1, 3]
-        while sort_ix.max() >= n:
-            sort_ix.index = range(0, sort_ix.shape[0] * 2, 2)
-            df0 = sort_ix[sort_ix >= n]
-            i = df0.index
-            j = df0.values - n
-            sort_ix[i] = link[j, 0]
-            df0 = pd.Series(link[j, 1], index=i + 1)
-            sort_ix = pd.concat([sort_ix, df0])
-            sort_ix = sort_ix.sort_index()
-            sort_ix.index = range(sort_ix.shape[0])
+        while clusters:
+            next_clusters: list[list[str]] = []
+            for cluster in clusters:
+                if len(cluster) < 2:
+                    continue
+                mid   = len(cluster) // 2
+                left  = cluster[:mid]
+                right = cluster[mid:]
 
-        return sort_ix.tolist()
+                var_l = self._cluster_var(left)
+                var_r = self._cluster_var(right)
+                total = var_l + var_r
 
-    # ── Recursive bisection ───────────────────────────────────────
+                # α = fraction going to left; 0.5 fallback if both zero
+                alpha = var_r / total if total > 1e-20 else 0.5
 
-    def _get_cluster_var(
-        self,
-        cov: pd.DataFrame,
-        c_items: list,
-    ) -> float:
+                weights[left]  *= alpha
+                weights[right] *= (1.0 - alpha)
+
+                if len(left)  > 1: next_clusters.append(left)
+                if len(right) > 1: next_clusters.append(right)
+
+            clusters = next_clusters
+
+        return weights
+
+    # ── Weight capping ─────────────────────────────────────────────
+
+    def _apply_cap(self, weights: pd.Series) -> pd.Series:
         """
-        Compute minimum variance portfolio variance
-        for a cluster of assets.
-        Uses inverse-variance weighting within cluster.
+        Iteratively clip weights to [0, max_weight] and redistribute
+        any excess proportionally to uncapped assets.  Converges in
+        O(n) iterations; usually done in < 10 passes.
         """
-        cov_slice = cov.loc[c_items, c_items]
-        w = self._get_ivp(cov_slice)
-        c_var = float(w @ cov_slice.values @ w)
-        return c_var
-
-    def _get_ivp(self, cov: pd.DataFrame) -> np.ndarray:
-        """Inverse variance portfolio weights."""
-        ivp = 1.0 / np.diag(cov.values)
-        return ivp / ivp.sum()
-
-    def _get_hrp_weights(
-        self,
-        cov: pd.DataFrame,
-        sort_ix: list,
-    ) -> pd.Series:
-        """
-        Recursive bisection allocation.
-
-        Splits sorted asset list into two halves.
-        Allocates between halves proportional to
-        inverse of their cluster variance.
-        Recurses within each half.
-        """
-        w = pd.Series(1.0, index=cov.index)
-        c_items = [sort_ix]
-
-        while len(c_items) > 0:
-            c_items = [
-                i[j:k]
-                for i in c_items
-                for j, k in (
-                    (0, len(i) // 2),
-                    (len(i) // 2, len(i)),
-                )
-                if len(i) > 1
-            ]
-
-            for i in range(0, len(c_items), 2):
-                if i + 1 >= len(c_items):
-                    break
-                c_left  = c_items[i]
-                c_right = c_items[i + 1]
-
-                var_left  = self._get_cluster_var(cov, c_left)
-                var_right = self._get_cluster_var(cov, c_right)
-
-                alpha = 1 - var_left / (var_left + var_right)
-                w[c_left]  *= alpha
-                w[c_right] *= (1 - alpha)
-
-        return w
+        if self.max_weight >= 1.0:
+            return weights / weights.sum()
+        w = weights.copy()
+        for _ in range(100):
+            over = w > self.max_weight
+            if not over.any():
+                break
+            excess       = (w[over] - self.max_weight).sum()
+            w[over]      = self.max_weight
+            below        = w[~over]
+            if below.sum() > 1e-12:
+                w[~over] = below + excess * below / below.sum()
+        return w / w.sum()
 
     # ── Main fit ──────────────────────────────────────────────────
 
     def fit(self) -> pd.Series:
-        """
-        Run Enhanced HRP.
+        original_assets = self.sigma.index.tolist()
 
-        Steps:
-        1. Build factor loading distance matrix
-        2. Hierarchical clustering (Ward linkage)
-        3. Sort assets by cluster (quasi-diagonal)
-        4. Recursive bisection allocation
-        5. Return normalized weights
+        valid_assets = [
+            a for a in self.sigma.index
+            if a in self.betas.index
+            and not self.betas.loc[a, FACTOR_NAMES].isna().any()
+        ]
 
-        Returns portfolio weights as labeled Series.
-        """
-        assets = list(self.sigma.index)
-        n      = len(assets)
+        if len(valid_assets) < 2:
+            raise ValueError("Not enough valid assets to run Enhanced HRP.")
 
-        # ── 1. Factor distance matrix ──────────────────────────────
-        dist_df = self._factor_distance_matrix()
-        logger.info(
-            f"Factor distance matrix: {dist_df.shape}"
-        )
+        self.sigma = self.sigma.loc[valid_assets, valid_assets]
 
-        # ── 2. Hierarchical clustering ─────────────────────────────
-        # Ward linkage minimizes total within-cluster variance
-        dist_condensed = squareform(dist_df.values)
-        link = linkage(dist_condensed, method="ward")
-        self.clusters = link
+        # Step 1–2: Factor-adjusted clustering
+        self.link_matrix = self._build_linkage(valid_assets)
 
-        # ── 3. Quasi-diagonal sort ─────────────────────────────────
-        sort_ix = self._get_quasi_diagonal(link, n)
-        sorted_assets = [assets[i] for i in sort_ix]
+        # Step 3: Quasi-diagonalization  (leaf order from dendrogram)
+        leaf_order         = list(leaves_list(self.link_matrix))
+        self.sorted_items  = [valid_assets[i] for i in leaf_order]
 
-        logger.info(
-            f"Cluster order: {sorted_assets}"
-        )
+        logger.info("Enhanced HRP — quasi-diagonal order: %s", self.sorted_items)
 
-        # ── 4. Recursive bisection ─────────────────────────────────
-        cov_sorted = self.sigma.loc[sorted_assets, sorted_assets]
-        weights_raw = self._get_hrp_weights(cov_sorted, sorted_assets)
+        # Step 4: Recursive bisection
+        weights = self._recursive_bisect(self.sorted_items)
+        weights = weights / weights.sum()
 
-        # ── 5. Normalize ───────────────────────────────────────────
-        weights = weights_raw / weights_raw.sum()
+        # Step 5: Cap any single asset at max_weight (default 20%)
+        weights = self._apply_cap(weights)
         weights.name = "hrp"
-        self.weights = weights.reindex(assets)
+
+        self.weights = pd.Series(0.0, index=original_assets)
+        self.weights.update(weights)
 
         logger.info(
-            f"Enhanced HRP complete — "
-            f"n_active={int((weights > 0.01).sum())}"
+            "Enhanced HRP complete — n_active=%d",
+            int((self.weights > 0.01).sum()),
         )
         self._log_weights()
         return self.weights
@@ -221,10 +221,13 @@ class EnhancedHRP:
     def _log_weights(self) -> None:
         if self.weights is None:
             return
-        print("\n=== Enhanced HRP Weights ===")
-        for asset, w in self.weights.sort_values(
-            ascending=False
-        ).items():
-            bar = "█" * int(w * 40)
-            print(f"  {asset:<25} {w:>6.1%}  {bar}")
+        print("\n=== Enhanced HRP Weights (Lopez de Prado, Factor-Adjusted) ===")
+        print(f"  Dendrogram order: {' → '.join(self.sorted_items)}")
+        print()
+        sorted_w = self.weights[self.sorted_items]
+        for asset in self.sorted_items:
+            w = float(self.weights.get(asset, 0))
+            if w > 0.001:
+                bar = "█" * int(w * 50)
+                print(f"  {asset:<28} {w:>6.1%}  {bar}")
         print()

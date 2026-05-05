@@ -79,20 +79,33 @@ class FREDLoader:
         BAA yield minus 10Y Treasury yield.
         Standard academic credit spread proxy back to 1919.
         ICE BofA OAS restricted on FRED since 2022.
+        AAA-BAA quality spread used as credit liquidity proxy (more
+        credit-specific than NFCI which blends equity and credit conditions).
         """
         cached = self._load("credit_spreads")
         if cached is not None:
             return cached
 
-        logger.info("Fetching Moody's credit spreads from FRED...")
+        logger.info("Fetching Moody's credit spreads and quality spread from FRED...")
         baa = self._fetch(FRED_SERIES["baa_yield"], "baa_yield")
+        aaa = self._fetch(FRED_SERIES["aaa_yield"], "aaa_yield")
         tsy = self._fetch(FRED_SERIES["treasury_10y"], "treasury_10y")
-        df = pd.concat([baa, tsy], axis=1).dropna()
+
+        df = pd.concat([baa, aaa, tsy], axis=1)
+
+        # Corporate bond spread proxies
         df["hy_oas"] = df["baa_yield"] - df["treasury_10y"]
         df["ig_oas"] = df["hy_oas"] * 0.5
-        df = df[["ig_oas", "hy_oas"]]
+
+        # AAA-BAA quality spread: widening = flight-to-quality = tighter credit liquidity.
+        # Better credit-specific proxy than NFCI (which blends equity + credit conditions).
+        df["quality_spread"] = df["baa_yield"] - df["aaa_yield"]
+
+        df = df.dropna(subset=["hy_oas"])
+        df = df[["ig_oas", "hy_oas", "quality_spread"]]
+        
         self._save(df, "credit_spreads")
-        logger.info(f"Credit spreads: {len(df)} months")
+        logger.info(f"Credit spreads (BAA-AAA quality spread): {len(df)} months")
         return df
     
     def get_tips_breakeven(self) -> pd.Series:

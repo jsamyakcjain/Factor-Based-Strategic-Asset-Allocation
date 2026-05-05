@@ -15,40 +15,7 @@ logger = logging.getLogger(__name__)
 class FactorRiskDecomposition:
     """
     Decomposes portfolio risk into five systematic factors
-    plus idiosyncratic component.
-
-    This is the central analytical result of the paper.
-
-    Method:
-        Portfolio factor exposure: β_port = w' · B
-        where B is (n_assets × n_factors) beta matrix
-
-        Factor variance contribution:
-        σ²_factor_k = (β_port_k)² × σ²_factor_k
-
-        Total systematic variance:
-        σ²_systematic = β_port' · Σ_f · β_port
-
-        Total portfolio variance:
-        σ²_port = w' · Σ · w
-
-        Idiosyncratic variance:
-        σ²_idio = σ²_port - σ²_systematic
-
-        Factor share:
-        share_k = σ²_factor_k / σ²_port
-
-    The equity premium share is the key diagnostic.
-    A well-diversified portfolio should have equity premium
-    share well below 50%. Most institutional portfolios
-    have 60-75% — hidden concentration.
-
-    Five portfolios compared:
-    1. Equal weight (naive baseline)
-    2. 60/40 (institutional benchmark)
-    3. MVO (return-driven)
-    4. Risk Parity (risk-driven)
-    5. Enhanced HRP (factor-driven)
+    plus idiosyncratic component using Euler risk decomposition.
     """
 
     def __init__(
@@ -68,66 +35,68 @@ class FactorRiskDecomposition:
         weights: pd.Series,
         label:   str = "portfolio",
     ) -> pd.Series:
-        """
-        Decompose portfolio risk into factor contributions.
+        # FIXED: Safe intersection of assets across all three data structures
+        valid_assets = [
+            a for a in weights.index
+            if a in self.asset_cov.index 
+            and a in self.betas.index 
+            and not self.betas.loc[a, FACTOR_NAMES].isna().any()
+        ]
 
-        Parameters
-        ----------
-        weights : pd.Series
-            Portfolio weights summing to 1.
-        label : str
-            Label for the portfolio.
+        if not valid_assets:
+            logger.warning(f"No valid assets found for decomposition of {label}.")
+            return pd.Series(0.0, index=FACTOR_NAMES + ["idiosyncratic"], name=label)
 
-        Returns
-        -------
-        pd.Series with factor risk shares (sum = 1).
-        Index: factor names + 'idiosyncratic'
-        """
-        # Align to common assets
-        assets = list(weights.index)
-        w = weights.values
-        B = self.betas.reindex(assets)[FACTOR_NAMES].values
-        Sigma   = self.asset_cov.loc[assets, assets].values
+        # Subset and rigorously re-normalize weights
+        w_raw = weights[valid_assets]
+        w_sum = w_raw.sum()
+        if w_sum == 0:
+            return pd.Series(0.0, index=FACTOR_NAMES + ["idiosyncratic"], name=label)
+            
+        w = (w_raw / w_sum).values
+        
+        B = self.betas.loc[valid_assets, FACTOR_NAMES].values
+        Sigma   = self.asset_cov.loc[valid_assets, valid_assets].values
         Sigma_f = self.factor_cov.values
 
         # Portfolio factor exposures
-        # beta_port = w' · B  →  shape (n_factors,)
         beta_port = w @ B
 
         # Total portfolio variance
         port_var = float(w @ Sigma @ w)
 
-        # Systematic variance per factor
-        # For factor k: contribution = beta_port_k² × Sigma_f[k,k]
-        # Full systematic: beta_port' · Sigma_f · beta_port
+        # Systematic variance via Euler decomposition
         systematic_var = float(beta_port @ Sigma_f @ beta_port)
 
-        # Individual factor contributions
-        # Marginal contribution of factor k:
-        # beta_port_k × (Sigma_f · beta_port)_k
+        # Marginal contribution of each factor to variance
         factor_contributions = beta_port * (Sigma_f @ beta_port)
 
-        # Idiosyncratic variance
-        idio_var = max(port_var - systematic_var, 0)
+        # Idiosyncratic variance is the residual
+        idio_var = max(port_var - systematic_var, 0.0)
 
-        # Build result series
-        result = {}
-        for i, factor in enumerate(FACTOR_NAMES):
-            result[factor] = factor_contributions[i]
+        # Build result mapping
+        result = {
+            factor: factor_contributions[i] 
+            for i, factor in enumerate(FACTOR_NAMES)
+        }
         result["idiosyncratic"] = idio_var
 
-        # Normalize to shares
+        # Normalize by sum of parts so components always sum to 100%.
+        # When systematic_var > port_var (factor model inconsistency with asset cov),
+        # idio_var is clamped to 0 and sum(parts) = systematic_var != port_var.
         total = sum(result.values())
-        if total > 0:
+        if total > 1e-12:
             result = {k: v / total for k, v in result.items()}
+        else:
+            result = {k: 0.0 for k in result.keys()}
 
         s = pd.Series(result, name=label)
 
         logger.info(
             f"{label:<20} "
-            f"ERP={s['equity_premium']:.1%}  "
-            f"TERM={s['term_premium']:.1%}  "
-            f"IDIO={s['idiosyncratic']:.1%}"
+            f"ERP={s.get('equity_premium', 0):.1%}  "
+            f"TERM={s.get('term_premium', 0):.1%}  "
+            f"IDIO={s.get('idiosyncratic', 0):.1%}"
         )
         return s
 
@@ -136,81 +105,51 @@ class FactorRiskDecomposition:
     def equal_weight(self, assets: list[str]) -> pd.Series:
         """Naive equal weight across all assets."""
         n = len(assets)
-        return pd.Series(
-            np.ones(n) / n,
-            index=assets,
-            name="equal_weight",
-        )
+        if n == 0:
+            return pd.Series(dtype=float, name="equal_weight")
+        return pd.Series(1.0 / n, index=assets, name="equal_weight")
 
     def sixty_forty(
         self,
         equity_assets: list[str],
         bond_assets:   list[str],
     ) -> pd.Series:
-        """
-        60/40 benchmark portfolio.
-        60% equally split across equity assets.
-        40% equally split across bond assets.
-        Universal institutional reference point.
-        """
-        weights = {}
+        """60/40 benchmark portfolio."""
+        # FIXED: Guard against ZeroDivisionError
         n_eq = len(equity_assets)
         n_bd = len(bond_assets)
+        
+        if n_eq == 0 or n_bd == 0:
+            raise ValueError("60/40 benchmark requires at least 1 equity and 1 bond asset.")
 
-        for a in equity_assets:
-            weights[a] = 0.60 / n_eq
-        for a in bond_assets:
-            weights[a] = 0.40 / n_bd
+        weights = {a: 0.60 / n_eq for a in equity_assets}
+        weights.update({a: 0.40 / n_bd for a in bond_assets})
 
         return pd.Series(weights, name="sixty_forty")
 
     # ── Compare all portfolios ────────────────────────────────────
 
-    def compare(
-        self,
-        portfolios: dict[str, pd.Series],
-    ) -> pd.DataFrame:
-        """
-        Run decomposition for all portfolios.
-        Returns DataFrame — rows are portfolios,
-        columns are factor risk shares.
-
-        This is the central result table of the paper.
-        """
+    def compare(self, portfolios: dict[str, pd.Series]) -> pd.DataFrame:
+        """Run decomposition for all portfolios."""
         results = []
         for name, weights in portfolios.items():
-            # Align weights to assets in covariance matrix
-            aligned = weights.reindex(
-                self.asset_cov.index
-            ).fillna(0)
-            aligned = aligned / aligned.sum()
-            s = self.decompose(aligned, label=name)
+            s = self.decompose(weights, label=name)
             results.append(s)
 
         df = pd.DataFrame(results) * 100  # convert to %
-        df.columns = [
-            c.replace("_", " ").title()
-            for c in df.columns
-        ]
+        df.columns = [c.replace("_", " ").title() for c in df.columns]
         return df.round(1)
 
     # ── Summary print ─────────────────────────────────────────────
 
-    def print_summary(
-        self,
-        result_df: pd.DataFrame,
-    ) -> None:
-        """
-        Print the central finding table.
-        Highlights equity premium concentration per portfolio.
-        """
+    def print_summary(self, result_df: pd.DataFrame) -> None:
+        """Print the central finding table."""
         print("\n" + "=" * 75)
         print("FACTOR RISK DECOMPOSITION — % of Total Portfolio Risk")
         print("=" * 75)
         print(result_df.to_string())
         print("=" * 75)
 
-        # Highlight equity concentration
         erp_col = "Equity Premium"
         if erp_col in result_df.columns:
             print("\nEquity Premium Concentration:")

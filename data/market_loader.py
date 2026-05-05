@@ -17,9 +17,10 @@ ETF_MAP: dict[str, str] = {
     "reits":         "VNQ",
 }
 
-COMMODITIES_SPLICE_DATE = "2006-08-31"
-COMMODITIES_PRIMARY     = "GSG"
-COMMODITIES_BACKFILL    = "^SPGSCI"
+COMMODITIES_SPLICE_DATE = "2002-09-30"   # PCRIX inception Jun 2002; first full quarter end
+COMMODITIES_PRIMARY     = "PCRIX"        # PIMCO Bloomberg Commodity Total Return (from 2002)
+COMMODITIES_BACKFILL    = "^BCOM"        # Bloomberg Commodity Index (from 1991)
+COMMODITIES_BACKFILL_ALT = "GSG"         # iShares GSCI ETF (last-resort fallback, from 2006)
 
 
 class MarketLoader:
@@ -69,49 +70,66 @@ class MarketLoader:
             logger.info("Cache hit: commodities_spliced")
             return pd.read_parquet(cache_path).squeeze()
 
-        logger.info("Building commodities splice (^SPGSCI + GSG)...")
+        logger.info("Building commodities splice (^BCOM backfill + PCRIX primary)...")
 
+        # Primary: PCRIX — PIMCO Bloomberg Commodity Total Return Fund (inception Jun 2002).
+        # Tracks Bloomberg Commodity Index (BCOM), more diversified than GSCI (less energy-heavy).
+        pcrix_ret = pd.Series(dtype=float)
         try:
-            s = yf.download(COMMODITIES_BACKFILL, start="1990-01-01", auto_adjust=True, progress=False)
-            if isinstance(s.columns, pd.MultiIndex):
-                s = s["Close"]
+            p = yf.download(COMMODITIES_PRIMARY, start="2002-01-01", auto_adjust=True, progress=False)
+            if isinstance(p.columns, pd.MultiIndex):
+                p = p["Close"]
             else:
-                s = s["Close"]
-            if isinstance(s, pd.DataFrame):
-                s = s.iloc[:, 0]
-            spgsci_ret = s.squeeze().resample("ME").last().squeeze().pct_change().dropna()
+                p = p["Close"]
+            if isinstance(p, pd.DataFrame):
+                p = p.iloc[:, 0]
+            pcrix_ret = p.squeeze().resample("ME").last().squeeze().pct_change().dropna()
+            if len(pcrix_ret) > 0:
+                logger.info(f"PCRIX loaded: {len(pcrix_ret)} months, "
+                            f"{pcrix_ret.index[0].date()} to {pcrix_ret.index[-1].date()}")
         except Exception as e:
-            logger.warning(f"^SPGSCI failed: {e}")
-            spgsci_ret = pd.Series(dtype=float)
+            logger.warning(f"PCRIX failed: {e}")
 
-        try:
-            g = yf.download(COMMODITIES_PRIMARY, start="2006-01-01", auto_adjust=True, progress=False)
-            if isinstance(g.columns, pd.MultiIndex):
-                g = g["Close"]
-            else:
-                g = g["Close"]
-            if isinstance(g, pd.DataFrame):
-                g = g.iloc[:, 0]
-            gsg_ret = g.squeeze().resample("ME").last().squeeze().pct_change().dropna()
-        except Exception as e:
-            logger.warning(f"GSG failed: {e}")
-            gsg_ret = pd.Series(dtype=float)
+        # Backfill: ^BCOM Bloomberg Commodity Index (1991+), then GSG as last resort.
+        bcom_ret = pd.Series(dtype=float)
+        for ticker in [COMMODITIES_BACKFILL, COMMODITIES_BACKFILL_ALT]:
+            try:
+                s = yf.download(ticker, start="1990-01-01", auto_adjust=True, progress=False)
+                if isinstance(s.columns, pd.MultiIndex):
+                    s = s["Close"]
+                else:
+                    s = s["Close"]
+                if isinstance(s, pd.DataFrame):
+                    s = s.iloc[:, 0]
+                bcom_ret = s.squeeze().resample("ME").last().squeeze().pct_change().dropna()
+                if len(bcom_ret) > 0:
+                    if ticker == COMMODITIES_BACKFILL_ALT:
+                        logger.warning(
+                            f"^BCOM unavailable — using {ticker} as backfill. "
+                            f"Index differs (GSCI vs BCOM); structural break possible at splice date."
+                        )
+                    else:
+                        logger.info(f"^BCOM backfill: {len(bcom_ret)} months")
+                    break
+            except Exception as e:
+                logger.warning(f"{ticker} failed: {e}")
 
         splice_date = pd.Timestamp(COMMODITIES_SPLICE_DATE)
-        if len(spgsci_ret) > 0 and len(gsg_ret) > 0:
+        if len(pcrix_ret) > 0 and len(bcom_ret) > 0:
             combined = pd.concat([
-                spgsci_ret[spgsci_ret.index < splice_date],
-                gsg_ret[gsg_ret.index >= splice_date],
+                bcom_ret[bcom_ret.index < splice_date],
+                pcrix_ret[pcrix_ret.index >= splice_date],
             ]).sort_index()
-        elif len(gsg_ret) > 0:
-            combined = gsg_ret
+            logger.info(f"Commodities: ^BCOM pre-{COMMODITIES_SPLICE_DATE}, PCRIX from {COMMODITIES_SPLICE_DATE}")
+        elif len(pcrix_ret) > 0:
+            combined = pcrix_ret
         else:
-            combined = spgsci_ret
+            combined = bcom_ret
 
         if isinstance(combined, pd.DataFrame):
             combined = combined.iloc[:, 0]
         combined = combined.squeeze()
         combined.name = "commodities"
         combined.to_frame().to_parquet(cache_path)
-        logger.info(f"Commodities spliced: {len(combined)} months, splice at {COMMODITIES_SPLICE_DATE}")
+        logger.info(f"Commodities spliced: {len(combined)} months")
         return combined
